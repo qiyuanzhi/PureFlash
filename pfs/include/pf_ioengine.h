@@ -15,6 +15,7 @@
 #include "liburing.h"
 
 
+
 class PfFlashStore;
 class IoSubTask;
 
@@ -58,6 +59,14 @@ public:
 
 	std::thread iouring_poller;
 	void polling_proc();
+};
+
+class PfspdkEngine : public PfIoEngine
+{
+public:
+	PfspdkEngine(PfFlashStore* disk) :PfIoEngine(disk) {};
+	int init();
+	//int submit_io(struct IoSubTask* io, int64_t media_offset, int64_t media_len);
 };
 
 #endif //PUREFLASH_PF_IOENGINE_H

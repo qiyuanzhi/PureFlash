@@ -11,6 +11,8 @@ set(CMAKE_CXX_FLAGS   "-Wall -Wno-sign-compare -Wconversion -fPIC ${CXX_FLAG_GCO
 
 set(CMAKE_CXX_FLAGS_DEBUG  "-O0 -g ")
 set(CMAKE_CXX_COMPILER g++)
+set(SPDKLIBS spdk_env_dpdk spdk_nvme spdk_util spdk_log)
+set(DPDKLIBS rte_eal rte_mempool rte_ring rte_telemetry rte_kvargs rte_pci rte_bus_pci)
 
 add_definitions(-D_POSIX_C_SOURCE=200112L)
 
@@ -22,6 +24,8 @@ ENDIF()
 
 INCLUDE_DIRECTORIES(include)
 include_directories(../S5bd/include ../pfs/nlohmann_json/include)
+include_directories(../thirdParty/spdk/include)
+include_directories(../thirdParty/spdk)
 USE_ZOOKEEPER()
 
 set (S5COMMON_SRC 
@@ -69,6 +73,9 @@ file(GLOB INCS2  "../../rdma-include/infiniband/*.h")
 #set_target_properties(s5sqlite3 PROPERTIES SKIP_BUILD_RPATH true)
 #set_target_properties(s5sqlite3 PROPERTIES CLEAN_DIRECT_OUTPUT 1)
 
+link_directories(${THIRDPARTY}/spdk/build/lib)
+link_directories(${THIRDPARTY}/spdk/dpdk/build/lib)
+
 
 add_definitions(-D__WITH_MURMUR)
 set (S5HASH_SRC src/hash/murmur.c src/hash/hashtable.c)
@@ -83,7 +90,7 @@ set_target_properties(s5common PROPERTIES CLEAN_DIRECT_OUTPUT 1)
 TARGET_LINK_LIBRARIES(s5common dl rdmacm ibverbs pthread  ${GCOV})
 
 add_executable(pfdd ${PFDD_SRC})
-TARGET_LINK_LIBRARIES(pfdd s5common rdmacm ibverbs pthread uuid zookeeper curl ${GCOV})
+TARGET_LINK_LIBRARIES(pfdd s5common rdmacm ibverbs ${SPDKLIBS} ${DPDKLIBS} pthread uuid zookeeper curl ${GCOV})
 
 add_executable(aof_helper src/pf_aof_test_helper.cpp)
-TARGET_LINK_LIBRARIES(aof_helper s5common rdmacm ibverbs pthread uuid zookeeper curl ${GCOV})
+TARGET_LINK_LIBRARIES(aof_helper s5common rdmacm ${SPDKLIBS} ${DPDKLIBS} ibverbs pthread uuid zookeeper curl ${GCOV})

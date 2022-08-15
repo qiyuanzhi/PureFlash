@@ -218,3 +218,10 @@ void PfIouringEngine::polling_proc()
 		}
 	}
 }
+
+
+int PfspdkEngine :: init()
+{
+
+	return 0;
+}
