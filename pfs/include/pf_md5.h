@@ -8,17 +8,26 @@
 #include <stdlib.h>
 #include "pf_utils.h"
 #include "pf_tray.h"
+#include "pf_ioengine.h"
 
 class MD5_CTX;
 typedef int dev_handle_t;
 
 class MD5Stream
 {
-	int fd;
+	union {
+		int fd;
+		struct {
+			PfspdkEngine *ioengine;
+			struct ns_entry *ns;
+		} nvme;
+	};
 	off_t base_offset;
 	char* buffer;
+	bool spdk_engine;
 public:
 	MD5Stream(int fd);
+	MD5Stream(struct ns_entry *ns, PfspdkEngine *eng);
 	~MD5Stream();
 	int init();
 	void destroy();

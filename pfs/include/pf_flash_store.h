@@ -92,6 +92,7 @@ struct lmt_hash
 	}
 };
 
+
 class PfFlashStore : public PfEventThread
 {
 public:
@@ -122,10 +123,7 @@ public:
 	//following are hot variables used by every IO. Put compact for cache hit convenience
 	union {
 		int fd;
-		struct {
-			struct spdk_nvme_ctrlr	*ctrlr;
-			struct spdk_nvme_ns	*ns;
-		} nvme;
+		struct ns_entry *ns;
 	};
 	uint64_t in_obj_offset_mask; // := obj_size -1,
 
@@ -149,6 +147,10 @@ public:
 	 * @retval -ENOENT  device not exist or failed to open
 	 */
 	int init(const char* dev_name);
+
+	int spdk_nvme_init(const char *trid_str);
+
+	int register_controller(const char *trid_str);
 
 	int process_event(int event_type, int arg_i, void* arg_p);
 	int preocess_io_event(IoSubTask* io);

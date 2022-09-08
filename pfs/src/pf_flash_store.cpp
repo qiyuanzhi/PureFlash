@@ -696,7 +696,7 @@ int PfFlashStore::save_meta_data()
 int PfFlashStore::load_meta_data()
 {
 	int buf_size = 1 << 20;
-	void* buf = aligned_alloc(LBA_LENGTH, buf_size);
+	void* buf = ioengine->aligned_alloc(LBA_LENGTH, buf_size);
 	if (!buf)
 	{
 		S5LOG_ERROR("Failed to alloc memory in save_meta_data");
@@ -808,16 +808,17 @@ int PfFlashStore::load_meta_data()
 int PfFlashStore::read_store_head()
 {
 	char uuid_str[64];
-	void* buf = aligned_alloc(LBA_LENGTH, LBA_LENGTH);
+	void *buf = ioengine->aligned_alloc(LBA_LENGTH, LBA_LENGTH);
 	if (!buf)
 	{
 		S5LOG_ERROR("Failed to alloc memory in read_store_head");
 		return -ENOMEM;
 	}
-	DeferCall _rel([buf]() {
-		free(buf);
+	DeferCall _rel([buf, ioengine]() {
+		((PfIoEngine *)ioengine)->engine_free(buf);
 	});
-	if (-1 == pread(fd, buf, LBA_LENGTH, 0))
+	
+	if (-1 == ioengine->sync_read(fd, buf, LBA_LENGTH, 0))
 		return -errno;
 	memcpy(&head, buf, sizeof(head));
 	if (head.magic != 0x3553424e) //magic number, NBS5
@@ -1753,3 +1754,200 @@ void PfFlashStore::post_load_check()
 	S5LOG_WARN("TODO: %s not implemented", __FUNCTION__);
 }
 
+
+static bool
+probe_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
+	 struct spdk_nvme_ctrlr_opts *opts)
+{
+	return true;
+}
+
+static void
+register_ns(struct spdk_nvme_ctrlr *ctrlr, struct ns_entry *entry)
+{
+	const struct spdk_nvme_ctrlr_data *cdata;
+	uint64_t ns_size;
+	struct spdk_nvme_ns *ns = entry->ns
+
+	cdata = spdk_nvme_ctrlr_get_data(ctrlr);
+
+	if (!spdk_nvme_ns_is_active(ns)) {
+		S5LOG_ERROR("Controller %-20.20s (%-20.20s): Skipping inactive NS %u\n",
+		       cdata->mn, cdata->sn,
+		       spdk_nvme_ns_get_id(ns));		
+		return;
+	}
+
+	ns_size = spdk_nvme_ns_get_size(ns);
+	sector_size = spdk_nvme_ns_get_sector_size(ns);
+
+	entry->ctrlr = ctrlr;
+	entry->block_size = spdk_nvme_ns_get_extended_sector_size(ns);
+	entry->block_cnt = spdk_nvme_ns_get_num_sectors(ns);
+	entry->md_size = spdk_nvme_ns_get_md_size(ns);
+	entry->md_interleave = spdk_nvme_ns_supports_extended_lba(ns);
+
+	if (4096 % entry->block_size != 0) {
+		S5LOG_ERROR("IO size is not a multiple of nsid %u sector size %u", spdk_nvme_ns_get_id(ns), entry->block_size);
+		free(entry);
+		return;
+	}
+
+	return ;
+}
+
+static void
+register_ctrlr(struct spdk_nvme_ctrlr *ctrlr, struct ns_entry *entry)
+{
+	struct spdk_nvme_ns *ns;
+	uint32_t nsid = ns->nsid;
+
+	if (nsid == 0) {
+		for (nsid = spdk_nvme_ctrlr_get_first_active_ns(ctrlr);
+		     nsid != 0; nsid = spdk_nvme_ctrlr_get_next_active_ns(ctrlr, nsid)) {
+			ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
+			if (ns == NULL) {
+				continue;
+			}
+			entry->nsid = nsid;
+			entry->ns = ns;
+			register_ns(ctrlr, entry);
+			// only register fist ns
+			break;
+		}
+	} else {
+		ns = spdk_nvme_ctrlr_get_ns(ctrlr, nsid);
+		if (!ns) {
+			S5LOG_ERROR("Namespace does not exist");
+			return ;
+		}
+		entry->ns = ns;
+		register_ns(ctrlr, entry);
+}
+	}
+
+
+static void
+attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
+	  struct spdk_nvme_ctrlr *ctrlr, const struct spdk_nvme_ctrlr_opts *opts)
+{
+	struct spdk_pci_addr	pci_addr;
+	struct spdk_pci_device	*pci_dev;
+	struct spdk_pci_id	pci_id;
+	struct ns_entry *entry = cb_ctx;
+	
+
+	if (spdk_pci_addr_parse(&pci_addr, trid->traddr)) {
+		return;
+	}
+
+	pci_dev = spdk_nvme_ctrlr_get_pci_device(ctrlr);
+	if (!pci_dev) {
+		return;
+	}
+
+	pci_id = spdk_pci_device_get_id(pci_dev);
+
+	S5LOG_INFO("Attached to NVMe Controller at %s [%04x:%04x]\n",
+			trid->traddr,
+			pci_id.vendor_id, pci_id.device_id);
+
+	register_ctrlr(ctrlr, entry);
+}
+
+int PfFlashStore::register_controller(const char *trid_str)
+{
+	struct spdk_nvme_transport_id	trid;
+	char *ns_str;
+	char nsid_str[6];
+	uint16_t nsid = 0;
+	int len;
+	
+	trid.trtype = SPDK_NVME_TRANSPORT_PCIE;
+	if (spdk_nvme_transport_id_parse(&trid, trid_str) != 0) {
+		S5LOG_ERROR("Invalid transport ID format %s", trid_str);
+		return -EINVAL;
+	}
+
+	ns_str = strcasestr(trid_str, "ns:");
+	if (ns_str) {
+		ns_str += 3;
+		len = strcspn(ns_str, " \t\n");
+		if (len > 5) {
+			S5LOG_ERROR("Invalid NVMe namespace IDs len %d", len);
+			return -EINVAL;
+		}
+		memcpy(nsid_str, ns_str, len);
+		nsid_str[len] = '\0';
+		nsid = spdk_strtol(nsid_str, 10);
+		if (nsid <= 0 || nsid > 65535) {
+			S5LOG_ERROR("Invalid NVMe namespace ID=%d", nsid);
+			return -EINVAL;
+		}
+	}
+
+	ns = calloc(1, sizeof(struct ns_entry));
+	if (entry == NULL) {
+		S5LOG_ERROR("ns_entry malloc");
+		return -ENOMEM;
+	}
+	ns->nsid = nsid;
+
+	if (spdk_nvme_probe(&trid, ns, probe_cb, attach_cb, NULL) != 0) {
+		S5LOG_ERROR("spdk_nvme_probe() failed for transport address: %s", trid_str);
+		return -EINVAL;
+	}
+}
+
+
+int PfFlashStore::spdk_nvme_init(const char *trid_str)
+{
+	int rc;
+	int ret;
+
+	rc = register_controller(trid_str);
+	if (rc) {
+		S5LOG_ERROR("failed to register controller for %s", trid_str);
+	}
+
+	ioengine = new PfspdkEngine(this);
+	ioengine->init();
+
+	PfEventThread::init(tray_name, MAX_AIO_DEPTH*2);
+	safe_strcpy(this->tray_name, tray_name, sizeof(this->tray_name));
+	S5LOG_INFO("Spdk Loading tray %s ...", tray_name);
+
+	if ((ret = read_store_head()) == 0)
+	{
+		ret = load_meta_data();
+		if (ret)
+			return ret;
+		redolog = new PfRedoLog();
+		ret = redolog->load(this);
+		if (ret)
+		{
+			S5LOG_ERROR("reodolog initialize failed rc:%d", ret);
+			return ret;
+		}
+		ret = redolog->replay();
+		if (ret)
+		{
+			S5LOG_ERROR("Failed to replay redo log, rc:%d", ret);
+			return ret;
+		}
+		post_load_fix();
+		post_load_check();
+		save_meta_data();
+		S5LOG_INFO("Load block map, key:%d total obj count:%d free obj count:%d, in triming:%d, obj size:%lld", obj_lmt.size(),
+		           free_obj_queue.queue_depth -1, free_obj_queue.count(), trim_obj_queue.count(), head.objsize);
+
+		redolog->start();
+	}
+	else if (ret == -EUCLEAN)
+	{
+
+	}
+	else
+		return ret;
+	
+}

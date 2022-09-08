@@ -19,11 +19,43 @@
 #include "pf_main.h"
 
 using namespace std;
+
 PfIoEngine::PfIoEngine(PfFlashStore* d)
 {
 	disk = d;
 	fd = d->fd;
 }
+
+PfIoEngine::sync_write(void *buffer, size_t size, uint64_t offset)
+{
+	int rc;
+
+	if ( (rc = pwrite(fd, buffer, size, offset)) != size)
+		return -errno;
+
+	return rc;
+}
+
+int PfIoEngine::sync_read(const void *buffer, size_t size, uint64_t offset)
+{
+	int rc;
+
+	if ( (rc = pread(fd, buffer, size, offset)) != size)
+		return -errno;
+
+	return rc;
+}
+
+void* PfIoEngine::engine_aligned_alloc(size_t alignment, size_t size)
+{
+	return aligned_alloc(alignment, size);
+}
+
+void PfIoEngine::engine_free(void *buf)
+{
+	free(buf);
+}
+
 
 int PfAioEngine::init()
 {
@@ -222,6 +254,174 @@ void PfIouringEngine::polling_proc()
 
 int PfspdkEngine :: init()
 {
+	int rc;
+	int i;
+	struct spdk_nvme_io_qpair_opts opts;
+
+	ns = disk->ns;
+	// do in ssd init
+	//ns->block_size = spdk_nvme_ns_get_extended_sector_size(ns->ns);
+	num_qpairs = QPAIRS_CNT;
+	qpair = calloc(num_qpairs, sizeof(struct spdk_nvme_qpair *));
+	if (qpair) {
+		S5LOG_ERROR("failed to calloc qpair");
+		return -ENOMEM;
+	}
+
+	spdk_nvme_ctrlr_get_default_io_qpair_opts(ns->ctrlr, &opts, sizeof(opts));
+	opts.delay_cmd_submit = true;
+	opts.create_only = true;
+	opts.async_mode = true;
+	//opts.io_queue_requests = spdk_max(g_opts.io_queue_requests, opts.io_queue_requests);
+
+	group = spdk_nvme_poll_group_create(NULL, NULL);
+	if (!group) {
+		S5LOG_ERROR("failed to create poll group");
+		rc = -EINVAL;
+		goto failed;
+	}
+
+	for (i = 0; i < num_qpairs; i++) {
+		qpair[i] = spdk_nvme_ctrlr_alloc_io_qpair(ns->ctrlr, &opts, sizeof(opts));
+		if (qpair[i] == NULL) {
+			rc = -EINVAL;
+			S5LOG_ERROR("failed to alloc io qpair, i=%d", i);
+			goto qpair_failed;
+		}
+
+		if (spdk_nvme_poll_group_add(group, qpair[i])) {
+			rc = -EINVAL;
+			S5LOG_ERROR("failed to add poll group, i=%d", i);
+			spdk_nvme_ctrlr_free_io_qpair(qpair[i]);
+			goto qpair_failed;
+		}
+
+		if (spdk_nvme_ctrlr_connect_io_qpair(ns->ctrlr, qpair[i])) {
+			rc = -EINVAL;
+			S5LOG_ERROR("failed to connect io qpair, i=%d", i);
+			spdk_nvme_ctrlr_free_io_qpair(qpair[i]);
+			goto qpair_failed;
+		}
+	}
 
 	return 0;
+qpair_failed:
+	for (; i > 0; --i) {
+		spdk_nvme_ctrlr_free_io_qpair(qpair[i - 1]);
+	}
+	spdk_nvme_poll_group_destroy(group);
+failed:
+	free(qpair);
+	return rc;
+}
+
+void PfspdkEngine::spdk_io_complete(void *arg, const struct spdk_nvme_cpl *cpl)
+{
+	int *result = arg;
+
+	if (spdk_nvme_cpl_is_pi_error(cpl)) {
+		S5LOG_ERROR("failed io on nvme with error (sct=%d, sc=%d)", 
+			cpl->status.sct, cpl->status.sc);
+		*result = -1;
+		return ;
+	}
+
+	*result = 1;
+	return ;
+}
+
+void PfspdkEngine::spdk_nvme_disconnected_qpair_cb(struct spdk_nvme_qpair *qpair, void *poll_group_ctx)
+{
+	return ;
+}
+
+int PfspdkEngine::sync_write(void *buffer, uint64_t buf_size, uint64_t offset)
+{
+	int rc;
+	int result = 0;
+	uint64_t lba, lba_cnt;
+
+	if (spdk_nvme_bytes_to_blocks(offset, &lba, buf_size, &lba_cnt) != 0) {
+		return -EINVAL;
+	}
+
+	rc = spdk_nvme_ns_cmd_write_with_md(ns, qpair[0], buffer, NULL, lba, lba_cnt,
+		spdk_io_complete, &result, 0, 0, 0);
+	if (rc) {
+		S5LOG_ERROR("nvme write failed! rc = %d", rc);
+		return rc;
+	}
+
+	while (result == 0) {
+		rc = spdk_nvme_qpair_process_completions(qpair[0], 1);
+		if (rc < 0) {
+			S5LOG_ERROR("NVMe io qpair process completion error, rc=%d", rc);
+			return rc;
+		}
+	}
+
+	return 0;
+}
+
+int PfspdkEngine::sync_read(void *buffer, uint64_t buf_size, uint64_t offset)
+{
+	int rc;
+	int result = 0;
+	uint64_t lba, lba_cnt;
+
+	if (spdk_nvme_bytes_to_blocks(offset, &lba, buf_size, &lba_cnt) != 0) {
+		return -EINVAL;
+	}
+	
+	rc = spdk_nvme_ns_cmd_read_with_md(ns, qpair[0], buffer, NULL, lba, lba_cnt, 
+		spdk_io_complete, &result, 0, 0, 0);
+	if (rc) {
+		S5LOG_ERROR("nvme read failed! rc = %d", rc);
+		return rc;
+	}
+
+	while (result == 0) {
+		rc = spdk_nvme_qpair_process_completions(qpair[0], 1);
+		if (rc < 0) {
+			S5LOG_ERROR("NVMe io qpair process completion error, rc=%d", rc);
+			return rc;
+		}
+	}
+	
+	return 0;
+}
+void* PfspdkEngine::engine_aligned_alloc(size_t alignment, size_t size)
+{
+	return spdk_dma_zmalloc(size, alignment, NULL);
+}
+
+void PfspdkEngine::engine_free(void *buf)
+{
+	spdk_dma_free(buf);
+}
+
+
+/*
+ * Convert I/O offset and length from bytes to blocks.
+ *
+ * Returns zero on success or non-zero if the byte parameters aren't divisible by the block size.
+ */
+uint64_t PfspdkEngine::spdk_nvme_bytes_to_blocks(uint64_t offset_bytes, uint64_t *offset_blocks,
+	uint64_t num_bytes, uint64_t *num_blocks)
+{
+	uint32_t block_size = ns->block_size;
+	uint8_t shift_cnt;
+
+	/* Avoid expensive div operations if possible. These spdk_u32 functions are very cheap. */
+	if (likely(spdk_u32_is_pow2(block_size))) {
+		shift_cnt = spdk_u32log2(block_size);
+		*offset_blocks = offset_bytes >> shift_cnt;
+		*num_blocks = num_bytes >> shift_cnt;
+		return (offset_bytes - (*offset_blocks << shift_cnt)) |
+		       (num_bytes - (*num_blocks << shift_cnt));
+	} else {
+		*offset_blocks = offset_bytes / block_size;
+		*num_blocks = num_bytes / block_size;
+		return (offset_bytes % block_size) | (num_bytes % block_size);
+	}
 }
