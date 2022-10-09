@@ -18,8 +18,7 @@ class MD5Stream
 	union {
 		int fd;
 		struct {
-			PfspdkEngine *ioengine;
-			struct ns_entry *ns;
+			PfIoEngine *ioengine;
 		} nvme;
 	};
 	off_t base_offset;
@@ -27,8 +26,8 @@ class MD5Stream
 	bool spdk_engine;
 public:
 	MD5Stream(int fd);
-	MD5Stream(struct ns_entry *ns, PfspdkEngine *eng);
 	~MD5Stream();
+	void spdk_eng_init(PfIoEngine *eng);
 	int init();
 	void destroy();
 	void reset(off_t offset);

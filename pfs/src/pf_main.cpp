@@ -174,12 +174,18 @@ int main(int argc, char *argv[])
 		S5LOG_FATAL("meta_size in config file is too small, at least %ld", MIN_META_RESERVE_SIZE);
 
 	const char *engine = conf_get(fp, "engine", "name", NULL, false);
-	if (engine == "io_uring")
+	if (strcmp(engine, "io_uring") == 0)
 		app_context.engine = IO_URING;
-	else if (engine == "spdk")
+	else if (strcmp(engine, "spdk") == 0)
 		app_context.engine = SPDK;
 	else
 		app_context.engine = AIO;
+
+	if (app_context.engine == SPDK) {
+		rc = spdk_setup_env();
+		if (rc)
+			S5LOG_FATAL("Failed to setup spdk");
+	}
 
 	int disp_count = conf_get_int(app_context.conf, "dispatch", "count", 4, FALSE);
 	app_context.disps.reserve(disp_count);
@@ -197,12 +203,6 @@ int main(int argc, char *argv[])
 		}
 	}
 
-	if (app_context.engine = SPDK) {
-		rc = spdk_setup_env();
-		if (rc)
-			S5LOG_FATAL("Failed to setup spdk");
-	}
-
 	for(int i=0;i<MAX_TRAY_COUNT;i++)
 	{
 		string name = format_string("tray.%d", i);
@@ -210,7 +210,10 @@ int main(int argc, char *argv[])
 		if(devname == NULL)
 			break;
 		auto s = new PfFlashStore();
-		rc = s->init(devname);
+		if (app_context.engine == SPDK)
+			rc = s->spdk_nvme_init(devname);
+		else
+			rc = s->init(devname);
 		if(rc) {
 			S5LOG_ERROR("Failed init tray:%s, rc:%d", devname, rc);
 			continue;

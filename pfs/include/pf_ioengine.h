@@ -25,7 +25,7 @@ struct ns_entry {
 	struct spdk_nvme_ctrlr	*ctrlr;
 	struct spdk_nvme_ns	*ns;
 	uint16_t nsid;
-	/** Size in bytes of a logical block */
+	/** Size in bytes of a logical block*/
 	uint32_t block_size;
 	/** Number of blocks */
 	uint64_t block_cnt;
@@ -37,7 +37,7 @@ struct ns_entry {
 	 *
 	 * Note that this field is valid only if there is metadata.
 	 */
-	bool md_interleave
+	bool md_interleave;
 };
 
 class PfIoEngine
@@ -52,11 +52,11 @@ public:
 	PfIoEngine(PfFlashStore* d);
 	virtual int init()=0;
 	virtual int submit_io(struct IoSubTask* io, int64_t media_offset, int64_t media_len) = 0;
-
-    int sync_read(void *buffer, uint64_t buf_size, uint64_t offset);
-    int sync_write(const void *buffer, uint64_t buf_size, uint64_t offset);
-	void *engine_aligned_alloc(size_t alignment, size_t size);
-	void engine_free(*buf);
+   	virtual int sync_read(void *buffer, uint64_t buf_size, uint64_t offset) = 0;
+    virtual int sync_write(void *buffer, uint64_t buf_size, uint64_t offset) = 0;
+	virtual void *engine_aligned_alloc(size_t alignment, size_t size) = 0;
+	virtual void engine_free(void *buf) = 0;
+	virtual uint64_t get_device_cap() = 0;
 };
 
 class PfAioEngine : public PfIoEngine
@@ -71,6 +71,12 @@ public:
 
 	std::thread aio_poller;
 	void polling_proc();
+
+    int sync_read(void *buffer, uint64_t buf_size, uint64_t offset);
+    int sync_write(void *buffer, uint64_t buf_size, uint64_t offset);
+	void *engine_aligned_alloc(size_t alignment, size_t size);
+	void engine_free(void *buf);
+	uint64_t get_device_cap();
 };
 
 
@@ -85,6 +91,12 @@ public:
 
 	std::thread iouring_poller;
 	void polling_proc();
+
+    int sync_read(void *buffer, uint64_t buf_size, uint64_t offset);
+    int sync_write(void *buffer, uint64_t buf_size, uint64_t offset);
+	void *engine_aligned_alloc(size_t alignment, size_t size);
+	void engine_free(void *buf);
+	uint64_t get_device_cap();
 };
 
 
@@ -92,7 +104,8 @@ public:
  *  first qpair is for sync IO
  *  
  */
-#define QPAIRS_CNT 1
+#define QPAIRS_CNT 2
+
 class PfspdkEngine : public PfIoEngine
 {
 	int num_qpairs;
@@ -101,15 +114,18 @@ class PfspdkEngine : public PfIoEngine
 public:
 	PfspdkEngine(PfFlashStore* disk) :PfIoEngine(disk) {};
 	int init();
-	//int submit_io(struct IoSubTask* io, int64_t media_offset, int64_t media_len);
+	int submit_io(struct IoSubTask* io, int64_t media_offset, int64_t media_len);
+
 	int sync_write(void *buffer, uint64_t buf_size, uint64_t offset);
 	int sync_read(void *buffer, uint64_t buf_size, uint64_t offset);
 	void *engine_aligned_alloc(size_t alignment, size_t size);
-	void engine_free(*buf);
-	void spdk_io_complete(void *arg, const struct spdk_nvme_cpl *cpl);
+	void engine_free(void *buf);
+	uint64_t get_device_cap();
+
 	void spdk_nvme_disconnected_qpair_cb(struct spdk_nvme_qpair *qpair, void *poll_group_ctx);
 	uint64_t spdk_nvme_bytes_to_blocks(uint64_t offset_bytes, uint64_t *offset_blocks,
 		uint64_t num_bytes, uint64_t *num_blocks);
+
 };
 
 #endif //PUREFLASH_PF_IOENGINE_H

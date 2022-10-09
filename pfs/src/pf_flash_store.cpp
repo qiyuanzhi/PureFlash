@@ -45,6 +45,7 @@
 #include <nlohmann/json.hpp>
 #include "pf_restful_api.h"
 #include "pf_client_priv.h"
+#include "pf_spdk.h"
 
 using namespace std;
 using nlohmann::json;
@@ -63,17 +64,14 @@ using nlohmann::json;
 #define REDO_LOG_SIZE (512LL<<20) //512M
 static_assert(OFFSET_REDO_LOG + REDO_LOG_SIZE < MIN_META_RESERVE_SIZE, "OFFSET_REDO_LOG exceed reserve area");
 
-static uint64_t get_device_cap(int fd);
 
-
-
-static BOOL is_disk_clean(int fd)
+static BOOL is_disk_clean(PfIoEngine *eng)
 {
-	void *buf = aligned_alloc(LBA_LENGTH, LBA_LENGTH);
+	void *buf = eng->engine_aligned_alloc(LBA_LENGTH, LBA_LENGTH);
 	BOOL rc = TRUE;
 	int64_t* p = (int64_t*)buf;
 
-	if (-1 == pread(fd, buf, LBA_LENGTH, 0))
+	if (LBA_LENGTH != eng->sync_read(buf, LBA_LENGTH, 0))
 	{
 		rc = FALSE;
 		goto release1;
@@ -87,22 +85,22 @@ static BOOL is_disk_clean(int fd)
 		}
 	}
 release1:
-	free(buf);
+	eng->engine_free(buf);
 	return rc;
 }
-static int clean_meta_area(int fd, size_t size)
+static int clean_meta_area(PfIoEngine *eng, size_t size)
 {
 	size_t buf_len = 1 << 20;
-	void *buf = aligned_alloc(LBA_LENGTH, buf_len);
+	void *buf = eng->engine_aligned_alloc(LBA_LENGTH, buf_len);
 	for(off_t off = 0; off < size; off += buf_len) {
-		if(pwrite(fd, buf, buf_len, off) == -1){
+		if(eng->sync_write(buf, buf_len, off) != buf_len){
 			S5LOG_ERROR("Failed write zero to meta area, rc:%d", errno);
-			free(buf);
+			eng->engine_free(buf);
 			return -errno;
 		}
 	}
 
-	free(buf);
+	eng->engine_free(buf);
 	return 0;
 }
 /**
@@ -125,6 +123,12 @@ int PfFlashStore::init(const char* tray_name)
 		return -errno;
 	}
 	err_clean.push_back([this]() {::close(fd); });
+
+	/*init ioengine first*/
+	//TODO: change io engine according to config file
+	ioengine = new PfAioEngine(this);
+	//ioengine = new PfIouringEngine(this);  
+	ioengine->init();
 
 	if ((ret = read_store_head()) == 0)
 	{
@@ -155,16 +159,16 @@ int PfFlashStore::init(const char* tray_name)
 	else if (ret == -EUCLEAN)
 	{
 		S5LOG_WARN("New disk found, initializing  (%s) now ...", tray_name);
-		if(!is_disk_clean(fd))
+		if(!is_disk_clean(ioengine))
 		{
 			S5LOG_ERROR("disk %s is not clean and will not be initialized.", tray_name);
 			return ret;
 		}
-		size_t dev_cap = get_device_cap(fd);
-		if(get_device_cap(fd) < (10LL<<30)) {
+		size_t dev_cap = ioengine->get_device_cap();
+		if(dev_cap < (10LL<<30)) {
 			S5LOG_WARN("Seems you are using a very small device with only %dGB capacity", dev_cap>>30);
 		}
-		ret = clean_meta_area(fd, app_context.meta_size);
+		ret = clean_meta_area(ioengine, app_context.meta_size);
 		if(ret) {
 			S5LOG_ERROR("Failed to clean meta area with zero, disk:%s, rc:%d", tray_name, ret);
 			return ret;
@@ -215,10 +219,6 @@ int PfFlashStore::init(const char* tray_name)
 
 	in_obj_offset_mask = head.objsize - 1;
 
-	//TODO: change io engine according to config file
-	ioengine = new PfAioEngine(this);
-	//ioengine = new PfIouringEngine(this);  
-	ioengine->init();
 	trimming_thread = std::thread(&PfFlashStore::trimming_proc, this);
 
 	err_clean.cancel_all();
@@ -377,28 +377,6 @@ int PfFlashStore::do_write(IoSubTask* io)
 	return 0;
 }
 
-static uint64_t get_device_cap(int fd)
-{
-	struct stat fst;
-	int rc = fstat(fd, &fst);
-	if(rc != 0)
-	{
-		rc = -errno;
-		S5LOG_ERROR("Failed fstat, rc:%d", rc);
-		return rc;
-	}
-	if(S_ISBLK(fst.st_mode )){
-		long number;
-		ioctl(fd, BLKGETSIZE, &number);
-		return number*512;
-	}
-	else
-	{
-		return fst.st_size;
-	}
-	return 0;
-}
-
 int PfFlashStore::initialize_store_head()
 {
 	memset(&head, 0, sizeof(head));
@@ -412,7 +390,7 @@ int PfFlashStore::initialize_store_head()
 	head.entry_size=sizeof(lmt_entry);
 	head.objsize=DEFAULT_OBJ_SIZE;
 	head.objsize_order=DEFAULT_OBJ_SIZE_ORDER; //objsize = 2 ^ objsize_order
-	head.tray_capacity = get_device_cap(fd);
+	head.tray_capacity = ioengine->get_device_cap();
 	head.meta_size = app_context.meta_size;
 	head.free_list_position = OFFSET_FREE_LIST;
 	head.free_list_size = (64 << 20) - 4096;
@@ -428,7 +406,7 @@ int PfFlashStore::initialize_store_head()
 	strftime(head.create_time, sizeof(head.create_time), "%Y%m%d %H:%M:%S", localtime(&time_now));
 
 
-	void *buf = aligned_alloc(LBA_LENGTH, LBA_LENGTH);
+	void *buf = ioengine->engine_aligned_alloc(LBA_LENGTH, LBA_LENGTH);
 	if(!buf)
 	{
 		S5LOG_ERROR("Failed to alloc memory");
@@ -437,13 +415,13 @@ int PfFlashStore::initialize_store_head()
 	memset(buf, 0, LBA_LENGTH);
 	memcpy(buf, &head, sizeof(head));
 	int rc = 0;
-	if (-1 == pwrite(fd, buf, LBA_LENGTH, 0))
+	if (LBA_LENGTH != ioengine->sync_write(buf, LBA_LENGTH, 0))
 	{
 		rc = -errno;
 		goto release1;
 	}
 release1:
-	free(buf);
+	ioengine->engine_free(buf);
 	return rc;
 }
 
@@ -633,17 +611,19 @@ static int load_fixed_queue(PfFixedSizeQueue<T>* q, MD5Stream* stream, off_t off
 int PfFlashStore::save_meta_data()
 {
 	int buf_size = 1 << 20;
-	void* buf = aligned_alloc(LBA_LENGTH, buf_size);
+	void* buf = ioengine->engine_aligned_alloc(LBA_LENGTH, buf_size);
 	if (!buf)
 	{
 		S5LOG_ERROR("Failed to alloc memory in save_meta_data");
 		return -ENOMEM;
 	}
-	DeferCall _c([buf]()->void {
-		free(buf);
+	DeferCall _c([buf, this]()->void {
+		((PfIoEngine *)this->ioengine)->engine_free(buf);
 	});
 	int rc = 0;
 	MD5Stream stream(fd);
+	if (app_context.engine == SPDK)
+		stream.spdk_eng_init(ioengine);
 	rc = stream.init();
 	if (rc) return rc;
 	rc = save_fixed_queue<int32_t>(&free_obj_queue, &stream, head.free_list_position, (char*)buf, buf_size);
@@ -696,18 +676,20 @@ int PfFlashStore::save_meta_data()
 int PfFlashStore::load_meta_data()
 {
 	int buf_size = 1 << 20;
-	void* buf = ioengine->aligned_alloc(LBA_LENGTH, buf_size);
+	void* buf = ioengine->engine_aligned_alloc(LBA_LENGTH, buf_size);
 	if (!buf)
 	{
 		S5LOG_ERROR("Failed to alloc memory in save_meta_data");
 		return -ENOMEM;
 	}
-	DeferCall _c([buf]() {
-		free(buf);
+	DeferCall _c([buf, this]() {
+		((PfIoEngine *)this->ioengine)->engine_free(buf);
 	});
 
 	int rc = 0;
 	MD5Stream stream(fd);
+	if (app_context.engine == SPDK)
+		stream.spdk_eng_init(ioengine);
 	rc = stream.init();
 	if (rc)
 	{
@@ -808,17 +790,17 @@ int PfFlashStore::load_meta_data()
 int PfFlashStore::read_store_head()
 {
 	char uuid_str[64];
-	void *buf = ioengine->aligned_alloc(LBA_LENGTH, LBA_LENGTH);
+	void *buf = ioengine->engine_aligned_alloc(LBA_LENGTH, LBA_LENGTH);
 	if (!buf)
 	{
 		S5LOG_ERROR("Failed to alloc memory in read_store_head");
 		return -ENOMEM;
 	}
-	DeferCall _rel([buf, ioengine]() {
-		((PfIoEngine *)ioengine)->engine_free(buf);
+	DeferCall _rel([buf, this]() {
+		((PfIoEngine *)this->ioengine)->engine_free(buf);
 	});
 	
-	if (-1 == ioengine->sync_read(fd, buf, LBA_LENGTH, 0))
+	if (LBA_LENGTH != ioengine->sync_read(buf, LBA_LENGTH, 0))
 		return -errno;
 	memcpy(&head, buf, sizeof(head));
 	if (head.magic != 0x3553424e) //magic number, NBS5
@@ -1336,7 +1318,7 @@ int PfFlashStore::recovery_write(lmt_key* key, lmt_entry * head, uint32_t snap_s
 
 	}
 	off_t in_blk_off = offset_in_block(offset, in_obj_offset_mask);
-	int rc = (int)pwrite(fd, buf, length, entry->offset + in_blk_off);
+	int rc = ioengine->sync_write(buf, length, entry->offset + in_blk_off);
 	if(rc == (int)length)
 		return 0;
 	else {
@@ -1407,17 +1389,17 @@ int PfFlashStore::finish_recovery_object(lmt_key* key, lmt_entry * head, size_t 
 		void *cow_buf = app_context.recovery_buf_pool.alloc(this->head.objsize);
 		DeferCall _d([cow_buf] { app_context.recovery_buf_pool.free(cow_buf); });
 
-		rc = (int)pread(fd, cow_buf, this->head.objsize, cow_src_off);
+		rc = ioengine->sync_read(cow_buf, this->head.objsize, cow_src_off);
 		if (rc != (int)this->head.objsize) {
 			rc = -errno;
-			S5LOG_ERROR("Failed cow pread on disk:%s rc:%d", tray_name, rc);
+			S5LOG_ERROR("Failed cow sync read on disk:%s rc:%d", tray_name, rc);
 			return rc;
 		}
 
-		rc = (int)pwrite(fd, cow_buf, this->head.objsize, cow_dst_off);
+		rc = ioengine->sync_write(cow_buf, this->head.objsize, cow_dst_off);
 		if (rc != (int)this->head.objsize) {
 			rc = -errno;
-			S5LOG_ERROR("Failed cow pwrite on disk:%s rc:%d", tray_name, rc);
+			S5LOG_ERROR("Failed cow sync write on disk:%s rc:%d", tray_name, rc);
 			return rc;
 		}
 
@@ -1431,7 +1413,8 @@ int PfFlashStore::finish_recovery_object(lmt_key* key, lmt_entry * head, size_t 
 		for (int i = 0; i < head->recovery_bmp->bit_count; i++) {
 			if (head->recovery_bmp->is_set(i)) {
 				//TODO: write with sector size(512) is very low performance, need improvement
-				int rc = (int)pwrite(fd, (char *) head->recovery_buf + i * SECTOR_SIZE, SECTOR_SIZE, base_offset + i * SECTOR_SIZE );
+				// if spdk support 512 write?
+				int rc = ioengine->sync_write((char *) head->recovery_buf + i * SECTOR_SIZE, SECTOR_SIZE, base_offset + i * SECTOR_SIZE );
 				if (rc != SECTOR_SIZE) {
 					rc = -errno;
 					S5LOG_ERROR("Failed write disk:%s on end_recovery, rc:%d", tray_name, rc);
@@ -1767,7 +1750,8 @@ register_ns(struct spdk_nvme_ctrlr *ctrlr, struct ns_entry *entry)
 {
 	const struct spdk_nvme_ctrlr_data *cdata;
 	uint64_t ns_size;
-	struct spdk_nvme_ns *ns = entry->ns
+	struct spdk_nvme_ns *ns = entry->ns;
+	uint32_t sector_size;
 
 	cdata = spdk_nvme_ctrlr_get_data(ctrlr);
 
@@ -1800,7 +1784,7 @@ static void
 register_ctrlr(struct spdk_nvme_ctrlr *ctrlr, struct ns_entry *entry)
 {
 	struct spdk_nvme_ns *ns;
-	uint32_t nsid = ns->nsid;
+	uint32_t nsid = entry->nsid;
 
 	if (nsid == 0) {
 		for (nsid = spdk_nvme_ctrlr_get_first_active_ns(ctrlr);
@@ -1834,7 +1818,7 @@ attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 	struct spdk_pci_addr	pci_addr;
 	struct spdk_pci_device	*pci_dev;
 	struct spdk_pci_id	pci_id;
-	struct ns_entry *entry = cb_ctx;
+	struct ns_entry *entry = (struct ns_entry*)cb_ctx;
 	
 
 	if (spdk_pci_addr_parse(&pci_addr, trid->traddr)) {
@@ -1858,7 +1842,7 @@ attach_cb(void *cb_ctx, const struct spdk_nvme_transport_id *trid,
 int PfFlashStore::register_controller(const char *trid_str)
 {
 	struct spdk_nvme_transport_id	trid;
-	char *ns_str;
+	const char *ns_str;
 	char nsid_str[6];
 	uint16_t nsid = 0;
 	int len;
@@ -1886,8 +1870,8 @@ int PfFlashStore::register_controller(const char *trid_str)
 		}
 	}
 
-	ns = calloc(1, sizeof(struct ns_entry));
-	if (entry == NULL) {
+	ns = (struct ns_entry *)calloc(1, sizeof(struct ns_entry));
+	if (ns == NULL) {
 		S5LOG_ERROR("ns_entry malloc");
 		return -ENOMEM;
 	}
@@ -1908,6 +1892,7 @@ int PfFlashStore::spdk_nvme_init(const char *trid_str)
 	rc = register_controller(trid_str);
 	if (rc) {
 		S5LOG_ERROR("failed to register controller for %s", trid_str);
+		return rc;
 	}
 
 	ioengine = new PfspdkEngine(this);
@@ -1945,9 +1930,68 @@ int PfFlashStore::spdk_nvme_init(const char *trid_str)
 	}
 	else if (ret == -EUCLEAN)
 	{
+		S5LOG_WARN("New disk found, initializing  (%s) now ...", tray_name);
+		if(!is_disk_clean(ioengine))
+		{
+			S5LOG_ERROR("disk %s is not clean and will not be initialized.", tray_name);
+			return ret;
+		}
+		size_t dev_cap = ioengine->get_device_cap();
+		if(dev_cap < (10LL<<30)) {
+			S5LOG_WARN("Seems you are using a very small device with only %dGB capacity", dev_cap>>30);
+		}
+		ret = clean_meta_area(ioengine, app_context.meta_size);
+		if(ret) {
+			S5LOG_ERROR("Failed to clean meta area with zero, disk:%s, rc:%d", tray_name, ret);
+			return ret;
 
+		}
+		if ((ret = initialize_store_head()) != 0)
+		{
+			S5LOG_ERROR("initialize_store_head failed rc:%d", ret);
+			return ret;
+		}
+		int obj_count = (int) ((head.tray_capacity - head.meta_size) >> head.objsize_order);
+
+		ret = free_obj_queue.init(obj_count);
+		if (ret)
+		{
+			S5LOG_ERROR("free_obj_queue initialize failed ret(%d)", ret);
+			return ret;
+		}
+		for (int i = 0; i < obj_count; i++)
+		{
+			free_obj_queue.enqueue(i);
+		}
+		ret = trim_obj_queue.init(obj_count);
+		if (ret)
+		{
+			S5LOG_ERROR("trim_obj_queue initialize failed ret(%d)", ret);
+			return ret;
+		}
+		ret = lmt_entry_pool.init(free_obj_queue.queue_depth * 2);
+		if (ret) {
+			S5LOG_ERROR("Failed to init lmt_entry_pool, disk:%s rc:%d", tray_name, ret);
+			return ret;
+		}
+
+		obj_lmt.reserve(obj_count * 2);
+		redolog = new PfRedoLog();
+		ret = redolog->init(this);
+		if (ret) {
+			S5LOG_ERROR("reodolog initialize failed ret(%d)", ret);
+			return ret;
+		}
+		redolog->start();
+		save_meta_data();
+		S5LOG_INFO("Init new disk (%s) complete, obj_count:%d obj_size:%lld.", tray_name, obj_count, head.objsize);
 	}
 	else
 		return ret;
+
+	in_obj_offset_mask = head.objsize - 1;
+
+	trimming_thread = std::thread(&PfFlashStore::trimming_proc, this);
 	
+	return ret;
 }

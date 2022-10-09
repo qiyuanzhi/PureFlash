@@ -17,8 +17,31 @@
 #include "pf_flash_store.h"
 #include "pf_dispatcher.h" //for IoSubTask
 #include "pf_main.h"
+#include "pf_spdk.h"
 
 using namespace std;
+
+static uint64_t fd_get_cap(int fd)
+{
+	struct stat fst;
+	int rc = fstat(fd, &fst);
+	if(rc != 0)
+	{
+		rc = -errno;
+		S5LOG_ERROR("Failed fstat, rc:%d", rc);
+		return rc;
+	}
+	if(S_ISBLK(fst.st_mode )){
+		long number;
+		ioctl(fd, BLKGETSIZE, &number);
+		return number*512;
+	}
+	else
+	{
+		return fst.st_size;
+	}
+	return 0;
+}
 
 PfIoEngine::PfIoEngine(PfFlashStore* d)
 {
@@ -26,7 +49,7 @@ PfIoEngine::PfIoEngine(PfFlashStore* d)
 	fd = d->fd;
 }
 
-PfIoEngine::sync_write(void *buffer, size_t size, uint64_t offset)
+int PfAioEngine::sync_write(void *buffer, uint64_t size, uint64_t offset)
 {
 	int rc;
 
@@ -36,7 +59,7 @@ PfIoEngine::sync_write(void *buffer, size_t size, uint64_t offset)
 	return rc;
 }
 
-int PfIoEngine::sync_read(const void *buffer, size_t size, uint64_t offset)
+int PfAioEngine::sync_read(void *buffer, uint64_t size, uint64_t offset)
 {
 	int rc;
 
@@ -46,14 +69,19 @@ int PfIoEngine::sync_read(const void *buffer, size_t size, uint64_t offset)
 	return rc;
 }
 
-void* PfIoEngine::engine_aligned_alloc(size_t alignment, size_t size)
+void* PfAioEngine::engine_aligned_alloc(size_t alignment, size_t size)
 {
 	return aligned_alloc(alignment, size);
 }
 
-void PfIoEngine::engine_free(void *buf)
+void PfAioEngine::engine_free(void *buf)
 {
 	free(buf);
+}
+
+uint64_t PfAioEngine::get_device_cap()
+{
+	return fd_get_cap(fd);
 }
 
 
@@ -251,6 +279,41 @@ void PfIouringEngine::polling_proc()
 	}
 }
 
+int PfIouringEngine::sync_write(void *buffer, uint64_t size, uint64_t offset)
+{
+	int rc;
+
+	if ( (rc = pwrite(fd, buffer, size, offset)) != size)
+		return -errno;
+
+	return rc;
+}
+
+int PfIouringEngine::sync_read(void *buffer, uint64_t size, uint64_t offset)
+{
+	int rc;
+
+	if ( (rc = pread(fd, buffer, size, offset)) != size)
+		return -errno;
+
+	return rc;
+}
+
+void* PfIouringEngine::engine_aligned_alloc(size_t alignment, size_t size)
+{
+	return aligned_alloc(alignment, size);
+}
+
+void PfIouringEngine::engine_free(void *buf)
+{
+	free(buf);
+}
+
+uint64_t PfIouringEngine::get_device_cap()
+{
+	return fd_get_cap(fd);
+}
+
 
 int PfspdkEngine :: init()
 {
@@ -260,10 +323,10 @@ int PfspdkEngine :: init()
 
 	ns = disk->ns;
 	// do in ssd init
-	//ns->block_size = spdk_nvme_ns_get_extended_sector_size(ns->ns);
+	ns->block_size = spdk_nvme_ns_get_extended_sector_size(ns->ns);
 	num_qpairs = QPAIRS_CNT;
-	qpair = calloc(num_qpairs, sizeof(struct spdk_nvme_qpair *));
-	if (qpair) {
+	qpair = (struct spdk_nvme_qpair **)calloc(num_qpairs, sizeof(struct spdk_nvme_qpair *));
+	if (!qpair) {
 		S5LOG_ERROR("failed to calloc qpair");
 		return -ENOMEM;
 	}
@@ -315,9 +378,9 @@ failed:
 	return rc;
 }
 
-void PfspdkEngine::spdk_io_complete(void *arg, const struct spdk_nvme_cpl *cpl)
+static void spdk_io_complete(void *arg, const struct spdk_nvme_cpl *cpl)
 {
-	int *result = arg;
+	int *result = (int *)arg;
 
 	if (spdk_nvme_cpl_is_pi_error(cpl)) {
 		S5LOG_ERROR("failed io on nvme with error (sct=%d, sc=%d)", 
@@ -345,7 +408,7 @@ int PfspdkEngine::sync_write(void *buffer, uint64_t buf_size, uint64_t offset)
 		return -EINVAL;
 	}
 
-	rc = spdk_nvme_ns_cmd_write_with_md(ns, qpair[0], buffer, NULL, lba, lba_cnt,
+	rc = spdk_nvme_ns_cmd_write_with_md(ns->ns, qpair[0], buffer, NULL, lba, lba_cnt,
 		spdk_io_complete, &result, 0, 0, 0);
 	if (rc) {
 		S5LOG_ERROR("nvme write failed! rc = %d", rc);
@@ -360,7 +423,7 @@ int PfspdkEngine::sync_write(void *buffer, uint64_t buf_size, uint64_t offset)
 		}
 	}
 
-	return 0;
+	return buf_size;
 }
 
 int PfspdkEngine::sync_read(void *buffer, uint64_t buf_size, uint64_t offset)
@@ -373,7 +436,7 @@ int PfspdkEngine::sync_read(void *buffer, uint64_t buf_size, uint64_t offset)
 		return -EINVAL;
 	}
 	
-	rc = spdk_nvme_ns_cmd_read_with_md(ns, qpair[0], buffer, NULL, lba, lba_cnt, 
+	rc = spdk_nvme_ns_cmd_read_with_md(ns->ns, qpair[0], buffer, NULL, lba, lba_cnt, 
 		spdk_io_complete, &result, 0, 0, 0);
 	if (rc) {
 		S5LOG_ERROR("nvme read failed! rc = %d", rc);
@@ -388,7 +451,7 @@ int PfspdkEngine::sync_read(void *buffer, uint64_t buf_size, uint64_t offset)
 		}
 	}
 	
-	return 0;
+	return buf_size;
 }
 void* PfspdkEngine::engine_aligned_alloc(size_t alignment, size_t size)
 {
@@ -398,6 +461,16 @@ void* PfspdkEngine::engine_aligned_alloc(size_t alignment, size_t size)
 void PfspdkEngine::engine_free(void *buf)
 {
 	spdk_dma_free(buf);
+}
+
+int PfspdkEngine::submit_io(struct IoSubTask* io, int64_t media_offset, int64_t media_len)
+{
+	return 0;
+}
+
+uint64_t PfspdkEngine::get_device_cap()
+{
+	return spdk_nvme_ns_get_size(ns->ns);
 }
 
 

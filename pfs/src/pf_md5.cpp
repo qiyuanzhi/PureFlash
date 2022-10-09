@@ -11,21 +11,13 @@
 #include "pf_md5.h"
 #include "basetype.h"
 #include "pf_main.h"
+#include "pf_spdk.h"
 
 MD5Stream::MD5Stream(int fd)
 {
 	this->fd=fd;
 	buffer = NULL;
 	spdk_engine = false;
-	reset(0);
-}
-
-MD5Stream::MD5Stream(struct ns_entry *ns, PfspdkEngine *eng)
-{
-	this->nvme.ns = ns;
-	this->nvme.ioengine = eng;
-	buffer = NULL;
-	spdk_engine = true;
 	reset(0);
 }
 
@@ -37,11 +29,17 @@ MD5Stream::~MD5Stream()
 		free(buffer);
 }
 
+void MD5Stream::spdk_eng_init(PfIoEngine *eng)
+{
+	this->nvme.ioengine = eng;
+	spdk_engine = true;
+}
+
 int MD5Stream::init()
 {
 	int rc =0;
 	if (spdk_engine)
-		buffer = spdk_dma_zmalloc(LBA_LENGTH, LBA_LENGTH, NULL);
+		buffer = (char *)spdk_dma_zmalloc(LBA_LENGTH, LBA_LENGTH, NULL);
 	else 
 		buffer  = (char*)aligned_alloc(LBA_LENGTH, LBA_LENGTH);
 
@@ -64,8 +62,8 @@ int MD5Stream::read(void *buf, size_t count, off_t offset)
 	int rc;
 
 	if (app_context.engine == SPDK) {
-		if ((rc = nvme.ioengine->spdk_nvme_read(buf, count, offset)) ! = 0)
-			return rc;
+		if ((rc = nvme.ioengine->sync_read(buf, count, offset)) != 0)
+			return -1;
 		return 0;
 	}
 	if (-1 == pread(fd, buf, count, base_offset + offset))
@@ -78,8 +76,8 @@ int MD5Stream::write(void *buf, size_t count, off_t offset)
 	int rc;
 
 	if (spdk_engine) {
-		if ((rc = nvme.ioengine->spdk_nvme_write(buf, count, offset)) ! = 0)
-			return rc;
+		if ((rc = nvme.ioengine->sync_write(buf, count, offset)) != 0)
+			return -1;
 		return 0;
 	}
 	if (-1 == pwrite(fd, buf, count, base_offset + offset))
