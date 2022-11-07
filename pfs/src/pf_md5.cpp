@@ -62,7 +62,7 @@ int MD5Stream::read(void *buf, size_t count, off_t offset)
 	int rc;
 
 	if (app_context.engine == SPDK) {
-		if ((rc = nvme.ioengine->sync_read(buf, count, offset)) != 0)
+		if ((rc = nvme.ioengine->sync_read(buf, count, offset)) != count)
 			return -1;
 		return 0;
 	}
@@ -76,7 +76,7 @@ int MD5Stream::write(void *buf, size_t count, off_t offset)
 	int rc;
 
 	if (spdk_engine) {
-		if ((rc = nvme.ioengine->sync_write(buf, count, offset)) != 0)
+		if ((rc = nvme.ioengine->sync_write(buf, count, offset)) != count)
 			return -1;
 		return 0;
 	}

@@ -1898,9 +1898,9 @@ int PfFlashStore::spdk_nvme_init(const char *trid_str)
 	ioengine = new PfspdkEngine(this);
 	ioengine->init();
 
-	PfEventThread::init(tray_name, MAX_AIO_DEPTH*2);
-	safe_strcpy(this->tray_name, tray_name, sizeof(this->tray_name));
-	S5LOG_INFO("Spdk Loading tray %s ...", tray_name);
+	PfEventThread::init(trid_str, MAX_AIO_DEPTH*2);
+	safe_strcpy(this->tray_name, trid_str, sizeof(this->tray_name));
+	S5LOG_INFO("Spdk Loading tray %s ...", trid_str);
 
 	if ((ret = read_store_head()) == 0)
 	{
