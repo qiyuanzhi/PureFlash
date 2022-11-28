@@ -1995,3 +1995,89 @@ int PfFlashStore::spdk_nvme_init(const char *trid_str)
 	
 	return ret;
 }
+
+
+int PfFlashStore::spdk_event_thread_start()
+{
+	int rc = pthread_create(&tid, NULL, spdk_thread_proc, this);
+
+	if(rc)
+	{
+		S5LOG_ERROR("Failed create spdk event thread:%s, rc:%d", name, rc);
+		return rc;
+	}
+	return 0;	
+}
+
+
+#define SPDK_IO_DEPTH (32)
+
+void* PfFlashStore::spdk_thread_proc(void *arg)
+{
+	PfFlashStore *pThis = (PfFlashStore *)arg;
+	prctl(PR_SET_NAME, pThis->name);
+	PfFixedSizeQueue<S5Event>* q;
+	int rc = 0;
+	int depth;
+	int running_io = 0;
+	bool switched = false;
+	int completion;
+
+	while (switched || ((rc = pThis->event_queue.get_events(&q)) == 0))
+	{
+		depth = SPDK_IO_DEPTH;
+		switched = false;
+		while(!q->is_empty())
+		{
+			S5Event* t = &q->data[q->head];
+			q->head = (q->head + 1) % q->queue_depth;
+			switch (t->type)
+			{
+				case EVT_SYNC_INVOKE: {
+					SyncInvokeArg* arg = (SyncInvokeArg*)t->arg_p;
+					arg->rc = arg->func();
+					sem_post(&arg->sem);
+					break;
+				}
+				case EVT_THREAD_EXIT: {
+					S5LOG_INFO("exit thread:%s", pThis->name);
+					return NULL;
+				}
+				default: {
+					if (depth > 0) {
+						pThis->process_event(t->type, t->arg_i, t->arg_p);
+						running_io++;
+						depth--;
+					}
+					// 下发了depth个IO
+					if (depth == 0) {
+						//wake up dispather
+						for (int i = 0; i < 4; i++){
+							app_context.disps[i]->event_queue.eq_wakeup();
+						}
+						//poll complete
+						rc = pThis->ioengine->poll_io(&completion);
+						if (rc == 0)
+							running_io -= completion;
+						depth = SPDK_IO_DEPTH;
+					}
+				}
+			}
+		}
+		// all io drained		
+		if (running_io) {
+			rc = pThis->ioengine->poll_io(&completion);
+			if (rc == 0)
+				running_io -= completion;
+
+			for (int i = 0; i < 4; i++){
+				app_context.disps[i]->event_queue.eq_wakeup();
+			}
+			
+			if (running_io) {
+				pThis->event_queue.switch_queue(&q);
+				switched = true;
+			}
+		}
+	}
+}

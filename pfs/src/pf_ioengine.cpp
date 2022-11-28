@@ -110,6 +110,12 @@ int PfAioEngine::submit_io(struct IoSubTask* io, int64_t media_offset, int64_t m
 	struct iocb* ios[1] = { &io->aio_cb };
 	return io_submit(aio_ctx, 1, ios);
 }
+
+int PfAioEngine::poll_io(int *completions)
+{
+	return 0;
+}
+
 void PfAioEngine::polling_proc()
 {
 #define MAX_EVT_CNT 100
@@ -226,6 +232,11 @@ int PfIouringEngine::submit_io(struct IoSubTask* io, int64_t media_offset, int64
 	if (rc<0)
 		S5LOG_ERROR("Failed io_uring_submit, rc:%d", rc);
 	return rc;
+}
+
+int PfIouringEngine::poll_io(int *completions)
+{
+	return 0;
 }
 
 void PfIouringEngine::polling_proc()
@@ -378,7 +389,7 @@ failed:
 	return rc;
 }
 
-static void spdk_io_complete(void *arg, const struct spdk_nvme_cpl *cpl)
+static void spdk_sync_io_complete(void *arg, const struct spdk_nvme_cpl *cpl)
 {
 	int *result = (int *)arg;
 
@@ -409,7 +420,7 @@ int PfspdkEngine::sync_write(void *buffer, uint64_t buf_size, uint64_t offset)
 	}
 
 	rc = spdk_nvme_ns_cmd_write_with_md(ns->ns, qpair[0], buffer, NULL, lba, lba_cnt,
-		spdk_io_complete, &result, 0, 0, 0);
+		spdk_sync_io_complete, &result, 0, 0, 0);
 	if (rc) {
 		S5LOG_ERROR("nvme write failed! rc = %d", rc);
 		return rc;
@@ -437,7 +448,7 @@ int PfspdkEngine::sync_read(void *buffer, uint64_t buf_size, uint64_t offset)
 	}
 	
 	rc = spdk_nvme_ns_cmd_read_with_md(ns->ns, qpair[0], buffer, NULL, lba, lba_cnt, 
-		spdk_io_complete, &result, 0, 0, 0);
+		spdk_sync_io_complete, &result, 0, 0, 0);
 	if (rc) {
 		S5LOG_ERROR("nvme read failed! rc = %d", rc);
 		return rc;
@@ -463,9 +474,54 @@ void PfspdkEngine::engine_free(void *buf)
 	spdk_dma_free(buf);
 }
 
+void PfspdkEngine::spdk_io_complete(void *ctx, const struct spdk_nvme_cpl *cpl)
+{
+	struct IoSubTask* io = (struct IoSubTask*)ctx;
+
+	io->half_complete(PfMessageStatus::MSG_STATUS_SUCCESS);
+
+}
+
 int PfspdkEngine::submit_io(struct IoSubTask* io, int64_t media_offset, int64_t media_len)
 {
+	BufferDescriptor* data_bd = io->parent_iocb->data_bd;
+	uint64_t lba, lba_cnt;
+
+	if (spdk_nvme_bytes_to_blocks(media_offset, &lba, media_len, &lba_cnt) != 0) {
+		return -EINVAL;
+	}
+
+	if (IS_READ_OP(io->opcode))
+		spdk_nvme_ns_cmd_read_with_md(ns->ns, qpair[1], data_bd->buf, NULL, lba, lba_cnt,
+			spdk_io_complete, io, 0, 0, 0);
+	else
+		spdk_nvme_ns_cmd_write_with_md(ns->ns, qpair[1], data_bd->buf, NULL, lba, lba_cnt, 
+			spdk_io_complete, io, 0, 0, 0);
+
+
 	return 0;
+}
+
+static void
+spdk_engine_disconnect_cb(struct spdk_nvme_qpair *qpair, void *ctx)
+{
+
+}
+
+int PfspdkEngine::poll_io(int *completions)
+{
+	int num_completions;
+
+	num_completions = spdk_nvme_poll_group_process_completions(group, 0, spdk_engine_disconnect_cb);
+
+	if (unlikely(num_completions < 0)) {
+		S5LOG_ERROR("NVMe io group process completion error, num_completions=%d", num_completions);
+		return -1;
+	}
+
+	*completions = num_completions;
+
+	return num_completions > 0 ? 0 : 1;
 }
 
 uint64_t PfspdkEngine::get_device_cap()

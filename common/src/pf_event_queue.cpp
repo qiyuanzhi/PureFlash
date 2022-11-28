@@ -74,6 +74,21 @@ int PfEventQueue::post_event(int type, int arg_i, void* arg_p)
 	//current_queue->tail = (current_queue->tail + 1) % current_queue->queue_depth;
 }
 
+int PfEventQueue::enqueue_event(int type, int arg_i, void* arg_p)
+{
+	AutoSpinLock _l(&lock);
+	int rc = current_queue->enqueue(S5Event{ type, arg_i, arg_p });
+	if(rc)
+		return rc;
+}
+
+int PfEventQueue::eq_wakeup()
+{
+	write(event_fd, &event_delta, sizeof(event_delta));
+
+	return 0;
+}
+
 /**
  * get events in queue. events are fetched via _@param q_. q may be empty if there
  * are no events.
@@ -95,6 +110,15 @@ int PfEventQueue::get_events(PfFixedSizeQueue<S5Event>** /*out*/ q)
 		return -errno;
 	}
 	//S5LOG_INFO("batch read from evt_fd:%d value:%ld", event_fd, v);
+	AutoSpinLock _l(&lock);
+	*q = current_queue;
+	current_queue = current_queue == &queue1 ? &queue2 : &queue1;
+	return 0;
+}
+
+
+int PfEventQueue::switch_queue(PfFixedSizeQueue<S5Event>** /*out*/ q)
+{
 	AutoSpinLock _l(&lock);
 	*q = current_queue;
 	current_queue = current_queue == &queue1 ? &queue2 : &queue1;

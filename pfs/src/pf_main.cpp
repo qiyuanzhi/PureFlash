@@ -221,7 +221,10 @@ int main(int argc, char *argv[])
 			app_context.trays.push_back(s);
 		}
 		register_tray(store_id, s->head.uuid, s->tray_name, s->head.tray_capacity, s->head.objsize);
-		s->start();
+		if (app_context.engine == SPDK)
+			s->spdk_event_thread_start();
+		else
+			s->start();
 	}
 	for (int i = 0; i < MAX_PORT_COUNT; i++)
 	{

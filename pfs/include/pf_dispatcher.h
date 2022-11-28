@@ -40,6 +40,7 @@ struct SubTask
 	PfMessageStatus complete_status;
 	virtual void complete(PfMessageStatus comp_status);
 	virtual void complete(PfMessageStatus comp_status, uint16_t meta_ver);
+	virtual PfEventQueue* half_complete(PfMessageStatus comp_status);
 
 	SubTask():opcode(PfOpCode(0)), parent_iocb(NULL), task_mask(0), rep_index(0), complete_status((PfMessageStatus)0){}
 };
@@ -171,6 +172,11 @@ inline void SubTask::complete(PfMessageStatus comp_status, uint16_t meta_ver){
 	if(meta_ver > parent_iocb->complete_meta_ver)
 		parent_iocb->complete_meta_ver = meta_ver;
 	complete(comp_status);
+}
+inline PfEventQueue* SubTask::half_complete(PfMessageStatus comp_status)
+{
+	complete_status = comp_status;
+	parent_iocb->conn->dispatcher->event_queue.enqueue_event(EVT_IO_COMPLETE, 0, this);
 }
 inline void IoSubTask::complete_read_with_zero() {
 //    PfMessageHead* cmd = parent_iocb->cmd_bd->cmd_bd;

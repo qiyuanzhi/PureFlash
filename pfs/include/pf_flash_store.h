@@ -150,6 +150,10 @@ public:
 
 	int spdk_nvme_init(const char *trid_str);
 
+	static void *spdk_thread_proc(void *arg);
+
+	int spdk_event_thread_start();
+
 	int register_controller(const char *trid_str);
 
 	int process_event(int event_type, int arg_i, void* arg_p);
