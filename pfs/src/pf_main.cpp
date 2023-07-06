@@ -79,6 +79,48 @@ static int spdk_setup_env()
 }
 
 
+static void * dispather_context_init(void *arg)
+{
+	int rc;
+	int *ret = (int *)arg;
+
+	int disp_count = conf_get_int(app_context.conf, "dispatch", "count", 4, FALSE);
+	app_context.disps.reserve(disp_count);
+	for (int i = 0; i < disp_count; i++)
+	{
+		app_context.disps.push_back(new PfDispatcher());
+		rc = app_context.disps[i]->init(i);
+		if (rc) {
+			S5LOG_ERROR("Failed init dispatcher[%d], rc:%d\n", i, rc);
+			*ret = rc;
+			return NULL;
+		}
+		rc = app_context.disps[i]->start();
+		if (rc != 0) {
+			S5LOG_FATAL("Failed to start dispatcher, index:%d", i);
+		}
+	}
+
+	*ret = 0;
+	return NULL;
+}
+
+static void * tcpserver_context_init(void *arg)
+{
+	int rc;
+
+	app_context.tcp_server=new PfTcpServer();
+	rc = app_context.tcp_server->init();
+	if(rc)
+	{
+		S5LOG_ERROR("Failed to init tcp server:%d", rc);
+		return NULL;
+	}
+
+	return NULL;
+}
+
+#define WITH_RDMA
 
 int main(int argc, char *argv[])
 {
@@ -187,20 +229,13 @@ int main(int argc, char *argv[])
 			S5LOG_FATAL("Failed to setup spdk");
 	}
 
-	int disp_count = conf_get_int(app_context.conf, "dispatch", "count", 4, FALSE);
-	app_context.disps.reserve(disp_count);
-	for (int i = 0; i < disp_count; i++)
-	{
-		app_context.disps.push_back(new PfDispatcher());
-		rc = app_context.disps[i]->init(i);
-		if (rc) {
-			S5LOG_ERROR("Failed init dispatcher[%d], rc:%d", i, rc);
-			return rc;
-		}
-		rc = app_context.disps[i]->start();
-		if (rc != 0) {
-			S5LOG_FATAL("Failed to start dispatcher, index:%d", i);
-		}
+	if (app_context.engine == SPDK)
+		spdk_call_unaffinitized(dispather_context_init, &rc);
+	else
+		dispather_context_init(&rc);
+
+	if (rc) {
+		S5LOG_FATAL("Failed to init dispather");
 	}
 
 	for(int i=0;i<MAX_TRAY_COUNT;i++)
@@ -221,11 +256,10 @@ int main(int argc, char *argv[])
 			app_context.trays.push_back(s);
 		}
 		register_tray(store_id, s->head.uuid, s->tray_name, s->head.tray_capacity, s->head.objsize);
-		if (app_context.engine == SPDK)
-			s->spdk_event_thread_start();
-		else
-			s->start();
+		s->start();
 	}
+
+
 	for (int i = 0; i < MAX_PORT_COUNT; i++)
 	{
 		string name = format_string("port.%d", i);
@@ -256,7 +290,6 @@ int main(int argc, char *argv[])
 
 	}
 
-
 	int rep_count = conf_get_int(app_context.conf, "replicator", "count", 2, FALSE);
 	app_context.replicators.reserve(rep_count);
 	for(int i=0; i< rep_count; i++) {
@@ -267,10 +300,12 @@ int main(int argc, char *argv[])
 			return rc;
 		}
 		app_context.replicators.push_back(rp);
+		#if 0
 		rc = rp->start();
 		if(rc != 0) {
 			S5LOG_FATAL("Failed to start replicator, index:%d", i);
 		}
+		#endif
 	}
 
 	app_context.error_handler = new PfErrorHandler();
@@ -278,6 +313,9 @@ int main(int argc, char *argv[])
 		S5LOG_FATAL("Failed to alloc error_handler");
 	}
 
+	spdk_call_unaffinitized(tcpserver_context_init, NULL);
+
+	#if 0
 	app_context.tcp_server=new PfTcpServer();
 	rc = app_context.tcp_server->init();
 	if(rc)
@@ -285,6 +323,8 @@ int main(int argc, char *argv[])
 		S5LOG_ERROR("Failed to init tcp server:%d", rc);
 		return rc;
 	}
+	#endif
+
 #ifdef WITH_RDMA
 	app_context.rdma_server = new PfRdmaServer();
 	rc = app_context.rdma_server->init(RDMA_PORT_BASE);
@@ -348,7 +388,8 @@ PfVolume* PfAfsAppContext::get_opened_volume(uint64_t vol_id)
 }
 
 PfDispatcher *PfAfsAppContext::get_dispatcher(uint64_t vol_id) {
-	return disps[VOL_ID_TO_VOL_INDEX(vol_id)%disps.size()];
+	return disps[(dis_index++)%4];
+	//return disps[VOL_ID_TO_VOL_INDEX(vol_id)%disps.size()];
 }
 
 void unexpected_exit_handler()

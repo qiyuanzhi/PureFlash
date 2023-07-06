@@ -74,6 +74,8 @@ public:
 	std::vector<PfDispatcher*> disps;
 	std::vector<PfReplicator*> replicators;
 
+	int dis_index;
+
 	pthread_mutex_t lock;
 	std::map<uint64_t, PfVolume*> opened_volumes;
     PfErrorHandler* error_handler;

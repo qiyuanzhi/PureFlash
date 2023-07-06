@@ -247,7 +247,7 @@ int PfRdmaServer::init(int port)
     memset(&listen_addr, 0, sizeof(listen_addr));
     listen_addr.sin_family = AF_INET;
     listen_addr.sin_port = htons((uint16_t)port);
-
+	
     this->ec = rdma_create_event_channel();
     rc = rdma_create_id(this->ec, &this->cm_id, NULL, RDMA_PS_TCP);
     if(rc)

@@ -2,13 +2,21 @@
 #define pf_event_thread_h__
 #include <functional>
 #include "pf_event_queue.h"
+#include "pf_spdk_ring.h"
 
 class PfEventThread
 {
 public:
+	#if 0
 	PfEventQueue event_queue;
+	#else
+	PfSpdkQueue event_queue;
+	#endif
 	pthread_t tid;
 	char name[32];
+	int (*func_priv)(int *, void *);
+	void *arg_v;
+
 
 	bool inited;
 	int init(const char* name, int queue_depth);

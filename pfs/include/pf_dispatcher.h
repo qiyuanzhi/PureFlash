@@ -96,6 +96,7 @@ public:
 	int disp_index;
 	BOOL is_timeout;
 
+
 	SubTask* subtasks[PF_MAX_SUBTASK_CNT];
 	IoSubTask io_subtasks[3];
 	uint64_t received_time;
@@ -176,7 +177,6 @@ inline void SubTask::complete(PfMessageStatus comp_status, uint16_t meta_ver){
 inline PfEventQueue* SubTask::half_complete(PfMessageStatus comp_status)
 {
 	complete_status = comp_status;
-	parent_iocb->conn->dispatcher->event_queue.enqueue_event(EVT_IO_COMPLETE, 0, this);
 }
 inline void IoSubTask::complete_read_with_zero() {
 //    PfMessageHead* cmd = parent_iocb->cmd_bd->cmd_bd;

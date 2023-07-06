@@ -144,7 +144,11 @@ public:
 	int io_depth;
 	int io_timeout; //timeout in second
 	PfVolumeState state;
+	#if 0
 	PfEventQueue* event_queue;
+	#else
+	PfSpdkQueue *event_queue;
+	#endif
 	ObjectMemoryPool<PfClientIocb> iocb_pool;
 	BufferPool cmd_pool;
 	BufferPool data_pool;

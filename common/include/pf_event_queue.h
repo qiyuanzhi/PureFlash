@@ -54,9 +54,6 @@ public:
 	int get_event(S5Event* /*out*/ evt);
 	inline bool is_empty() { return current_queue->is_empty();}
 	int sync_invoke(std::function<int()> f);
-	int switch_queue(PfFixedSizeQueue<S5Event>** /*out*/ q);
-	int enqueue_event(int type, int arg_i, void* arg_p);
-	int eq_wakeup();
 };
 
 struct SyncInvokeArg

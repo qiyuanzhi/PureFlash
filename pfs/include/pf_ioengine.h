@@ -52,7 +52,7 @@ public:
 	PfIoEngine(PfFlashStore* d);
 	virtual int init()=0;
 	virtual int submit_io(struct IoSubTask* io, int64_t media_offset, int64_t media_len) = 0;
-	virtual int poll_io(int *completions) = 0;
+	//virtual int poll_io(int *completions) = 0;
    	virtual int sync_read(void *buffer, uint64_t buf_size, uint64_t offset) = 0;
     virtual int sync_write(void *buffer, uint64_t buf_size, uint64_t offset) = 0;
 	virtual void *engine_aligned_alloc(size_t alignment, size_t size) = 0;
@@ -78,7 +78,7 @@ public:
 	void *engine_aligned_alloc(size_t alignment, size_t size);
 	void engine_free(void *buf);
 	uint64_t get_device_cap();
-	int poll_io(int *completions);
+	//int poll_io(int *completions);
 };
 
 
@@ -99,7 +99,7 @@ public:
 	void *engine_aligned_alloc(size_t alignment, size_t size);
 	void engine_free(void *buf);
 	uint64_t get_device_cap();
-	int poll_io(int *completions);
+	//int poll_io(int *completions);
 };
 
 
@@ -118,7 +118,7 @@ public:
 	PfspdkEngine(PfFlashStore* disk) :PfIoEngine(disk) {};
 	int init();
 	int submit_io(struct IoSubTask* io, int64_t media_offset, int64_t media_len);	
-	int poll_io(int *completions);
+	static int poll_io(int *completions, void *arg);
 	static void spdk_io_complete(void *ctx, const struct spdk_nvme_cpl *cpl);
 	//vector记录需要唤醒的dispatcher queue
 

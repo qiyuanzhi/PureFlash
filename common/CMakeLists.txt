@@ -26,6 +26,7 @@ INCLUDE_DIRECTORIES(include)
 include_directories(../S5bd/include ../pfs/nlohmann_json/include)
 include_directories(../thirdParty/spdk/include)
 include_directories(../thirdParty/spdk)
+include_directories(../thirdParty/spdk/dpdk/build/include)
 USE_ZOOKEEPER()
 
 set (S5COMMON_SRC 
@@ -48,6 +49,7 @@ set (S5COMMON_SRC
 	src/pf_buffer.cpp
 	src/pf_event_queue.cpp
 	src/pf_event_thread.cpp
+	src/pf_spdk_ring.cpp
 	src/pf_poller.cpp
 	src/pf_connection.cpp
 	src/pf_zk_client.cpp

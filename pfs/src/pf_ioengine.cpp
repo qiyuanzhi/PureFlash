@@ -110,11 +110,12 @@ int PfAioEngine::submit_io(struct IoSubTask* io, int64_t media_offset, int64_t m
 	struct iocb* ios[1] = { &io->aio_cb };
 	return io_submit(aio_ctx, 1, ios);
 }
-
+#if 0
 int PfAioEngine::poll_io(int *completions)
 {
 	return 0;
 }
+#endif
 
 void PfAioEngine::polling_proc()
 {
@@ -233,11 +234,12 @@ int PfIouringEngine::submit_io(struct IoSubTask* io, int64_t media_offset, int64
 		S5LOG_ERROR("Failed io_uring_submit, rc:%d", rc);
 	return rc;
 }
-
+#if 0
 int PfIouringEngine::poll_io(int *completions)
 {
 	return 0;
 }
+#endif
 
 void PfIouringEngine::polling_proc()
 {
@@ -478,7 +480,7 @@ void PfspdkEngine::spdk_io_complete(void *ctx, const struct spdk_nvme_cpl *cpl)
 {
 	struct IoSubTask* io = (struct IoSubTask*)ctx;
 
-	io->half_complete(PfMessageStatus::MSG_STATUS_SUCCESS);
+	io->complete(PfMessageStatus::MSG_STATUS_SUCCESS);
 
 }
 
@@ -508,11 +510,12 @@ spdk_engine_disconnect_cb(struct spdk_nvme_qpair *qpair, void *ctx)
 
 }
 
-int PfspdkEngine::poll_io(int *completions)
+int PfspdkEngine::poll_io(int *completions, void *arg)
 {
 	int num_completions;
+	PfspdkEngine *pthis = (PfspdkEngine *)arg;
 
-	num_completions = spdk_nvme_poll_group_process_completions(group, 0, spdk_engine_disconnect_cb);
+	num_completions = spdk_nvme_poll_group_process_completions(pthis->group, 0, spdk_engine_disconnect_cb);
 
 	if (unlikely(num_completions < 0)) {
 		S5LOG_ERROR("NVMe io group process completion error, num_completions=%d", num_completions);

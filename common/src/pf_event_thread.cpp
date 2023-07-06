@@ -7,7 +7,7 @@ PfEventThread::PfEventThread() {
 }
 int PfEventThread::init(const char* name, int qd)
 {
-	int rc = event_queue.init(name, qd, 0);
+	int rc = event_queue.init(name, qd, SPDK_RING_TYPE_MP_SC);
 	if(rc)
 		return rc;
 	strncpy(this->name, name, sizeof(this->name));
@@ -49,6 +49,7 @@ void PfEventThread::stop()
 
 }
 
+#if 0
 void *PfEventThread::thread_proc(void* arg)
 {
 	PfEventThread* pThis = (PfEventThread*)arg;
@@ -81,7 +82,50 @@ void *PfEventThread::thread_proc(void* arg)
 	}
 	return NULL;
 }
+#else
+#define BATH_PROCESS 8
+void *PfEventThread::thread_proc(void* arg)
+{
+	PfEventThread* pThis = (PfEventThread*)arg;
+	prctl(PR_SET_NAME, pThis->name);
+	int rc = 0, i = 0;
+	void *events[BATH_PROCESS];
 
+
+	while((rc = pThis->event_queue.get_events(BATH_PROCESS, events)) >= 0) {
+		for (i = 0; i < rc; i++) {
+			struct pf_spdk_msg *event = (struct pf_spdk_msg *)events[i];
+			switch (event->event.type)
+			{
+				case EVT_SYNC_INVOKE:
+				{
+					SyncInvokeArg* arg = (SyncInvokeArg*)event->event.arg_p;
+					arg->rc = arg->func();
+					sem_post(&arg->sem);
+					break;
+				}
+				case EVT_THREAD_EXIT:
+				{
+					S5LOG_INFO("exit thread:%s", pThis->name);
+					return NULL;
+				}
+				default:
+				{	
+					pThis->process_event(event->event.type, event->event.arg_i, event->event.arg_p);
+					break;
+				}
+			}
+			pThis->event_queue.put_event(events[i]);
+		}
+		if (pThis->func_priv) {
+			int com = 0;
+			pThis->func_priv(&com, pThis->arg_v);
+		}
+	}
+
+	return NULL;
+}
+#endif
 
 int PfEventThread::sync_invoke(std::function<int(void)> _f)
 {
