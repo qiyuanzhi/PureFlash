@@ -11,7 +11,7 @@ set(CMAKE_CXX_FLAGS   "-Wall -Wno-sign-compare -Wconversion -fPIC ${CXX_FLAG_GCO
 
 set(CMAKE_CXX_FLAGS_DEBUG  "-O0 -g ")
 set(CMAKE_CXX_COMPILER g++)
-set(SPDKLIBS spdk_env_dpdk spdk_nvme spdk_util spdk_log)
+set(SPDKLIBS spdk_nvme spdk_env_dpdk spdk_util spdk_log)
 set(DPDKLIBS rte_eal rte_mempool rte_ring rte_telemetry rte_kvargs rte_pci rte_bus_pci)
 
 add_definitions(-D_POSIX_C_SOURCE=200112L)

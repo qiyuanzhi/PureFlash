@@ -10,11 +10,7 @@
 #include "spdk/nvme.h"
 #include "spdk/util.h"
 #include "spdk/env.h"
-
 #include "spdk/stdinc.h"
-#include "spdk/version.h"
-
-#include "spdk/assert.h"
 #include "spdk/env.h"
 #include "spdk/init.h"
 #include "spdk/log.h"

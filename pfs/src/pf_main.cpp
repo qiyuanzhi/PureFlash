@@ -216,6 +216,10 @@ int main(int argc, char *argv[])
 		S5LOG_FATAL("meta_size in config file is too small, at least %ld", MIN_META_RESERVE_SIZE);
 
 	const char *engine = conf_get(fp, "engine", "name", NULL, false);
+	if (!engine) {
+		S5LOG_FATAL("Failed to find key(engine:name) in conf(%s).", s5daemon_conf);
+		return -S5_CONF_ERR;
+	}
 	if (strcmp(engine, "io_uring") == 0)
 		app_context.engine = IO_URING;
 	else if (strcmp(engine, "spdk") == 0)
@@ -228,14 +232,22 @@ int main(int argc, char *argv[])
 		if (rc)
 			S5LOG_FATAL("Failed to setup spdk");
 	}
+	//spdk_unaffinitize_thread();
 
-	if (app_context.engine == SPDK)
-		spdk_call_unaffinitized(dispather_context_init, &rc);
-	else
-		dispather_context_init(&rc);
-
-	if (rc) {
-		S5LOG_FATAL("Failed to init dispather");
+	int disp_count = conf_get_int(app_context.conf, "dispatch", "count", 4, FALSE);
+	app_context.disps.reserve(disp_count);
+	for (int i = 0; i < disp_count; i++)
+	{
+		app_context.disps.push_back(new PfDispatcher());
+		rc = app_context.disps[i]->init(i);
+		if (rc) {
+			S5LOG_ERROR("Failed init dispatcher[%d], rc:%d", i, rc);
+			return rc;
+		}
+		rc = app_context.disps[i]->start();
+		if (rc != 0) {
+			S5LOG_FATAL("Failed to start dispatcher, index:%d", i);
+		}
 	}
 
 	for(int i=0;i<MAX_TRAY_COUNT;i++)
@@ -258,7 +270,6 @@ int main(int argc, char *argv[])
 		register_tray(store_id, s->head.uuid, s->tray_name, s->head.tray_capacity, s->head.objsize);
 		s->start();
 	}
-
 
 	for (int i = 0; i < MAX_PORT_COUNT; i++)
 	{
@@ -300,12 +311,10 @@ int main(int argc, char *argv[])
 			return rc;
 		}
 		app_context.replicators.push_back(rp);
-		#if 0
 		rc = rp->start();
 		if(rc != 0) {
 			S5LOG_FATAL("Failed to start replicator, index:%d", i);
 		}
-		#endif
 	}
 
 	app_context.error_handler = new PfErrorHandler();
@@ -313,9 +322,7 @@ int main(int argc, char *argv[])
 		S5LOG_FATAL("Failed to alloc error_handler");
 	}
 
-	spdk_call_unaffinitized(tcpserver_context_init, NULL);
-
-	#if 0
+	//spdk_call_unaffinitized(tcpserver_context_init, NULL);
 	app_context.tcp_server=new PfTcpServer();
 	rc = app_context.tcp_server->init();
 	if(rc)
@@ -323,7 +330,6 @@ int main(int argc, char *argv[])
 		S5LOG_ERROR("Failed to init tcp server:%d", rc);
 		return rc;
 	}
-	#endif
 
 #ifdef WITH_RDMA
 	app_context.rdma_server = new PfRdmaServer();

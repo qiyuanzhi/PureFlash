@@ -49,12 +49,6 @@ class PfRdmaServer;
 #define DEFAULT_OBJ_SIZE_ORDER 26 // DEFAULT_OBJ_SIZE=1<<DEFAULT_OBJ_SIZE_ORDER
 //STATIC_ASSERT(DEFAULT_OBJ_SIZE == (1<<DEFAULT_OBJ_SIZE_ORDER));
 
-enum {
-	AIO,
-	IO_URING,
-	SPDK,
-};
-
 class PfVolume;
 class PfAfsAppContext : public PfAppCtx
 {
@@ -65,7 +59,6 @@ public:
 	PfZkClient zk_client;
 	int64_t meta_size;
 	int rep_conn_type;
-	int engine;
 
 	PfTcpServer* tcp_server;
 	PfRdmaServer* rdma_server;
