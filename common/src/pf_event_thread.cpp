@@ -12,14 +12,24 @@ PfEventThread::PfEventThread() {
 }
 int PfEventThread::init(const char* name, int qd)
 {
-	int rc = event_queue.init(name, qd, SPDK_RING_TYPE_MP_SC);
-	if(rc)
-		return rc;
+	int rc;
 	strncpy(this->name, name, sizeof(this->name));
-	if (g_app_ctx->engine == SPDK)
+
+	if (g_app_ctx->engine == SPDK) {
+		event_queue = new PfSpdkQueue();
+		rc = ((PfSpdkQueue *)event_queue)->init(name, qd, SPDK_RING_TYPE_MP_SC);
 		thread_proc = thread_proc_spdkr;
-	else
+	} else {
+		event_queue = new PfEventQueue();
+		rc = ((PfEventQueue *)event_queue)->init(name, qd, 0);
 		thread_proc = thread_proc_eventq;
+	}
+
+	if(rc) {
+		S5LOG_ERROR("Failed to init PfEventThread, rc:%d", rc);
+		return rc;
+	}
+
 	inited = true;
 	return 0;
 }
@@ -28,7 +38,7 @@ void PfEventThread::destroy()
 	if(inited) {
 		if(tid)
 			stop();
-		event_queue.destroy();
+		event_queue->destroy();
 		inited = false;
 	}
 }
@@ -49,7 +59,7 @@ int PfEventThread::start()
 }
 void PfEventThread::stop()
 {
-	event_queue.post_event(EVT_THREAD_EXIT, 0, NULL);
+	event_queue->post_event(EVT_THREAD_EXIT, 0, NULL);
 	int rc = pthread_join(tid, NULL);
 	if(rc) {
 		S5LOG_ERROR("Failed call pthread_join on thread:%s, rc:%d", name, rc);
@@ -57,18 +67,15 @@ void PfEventThread::stop()
 	tid=0;
 
 }
-void* thread_proc_eventq(void* arg)
-{
-	return NULL;
-}
-#if 0
+
 void * thread_proc_eventq(void* arg)
 {
 	PfEventThread* pThis = (PfEventThread*)arg;
 	prctl(PR_SET_NAME, pThis->name);
 	PfFixedSizeQueue<S5Event>* q;
+	PfEventQueue *eq = (PfEventQueue *)pThis->event_queue;
 	int rc = 0;
-	while ((rc = pThis->event_queue.get_events(&q)) == 0)
+	while ((rc = eq->get_events(&q)) == 0)
 	{
 		while(!q->is_empty())
 		{
@@ -94,7 +101,6 @@ void * thread_proc_eventq(void* arg)
 	}
 	return NULL;
 }
-#endif
 
 #define BATH_PROCESS 8
 void* thread_proc_spdkr(void* arg)
@@ -103,9 +109,10 @@ void* thread_proc_spdkr(void* arg)
 	prctl(PR_SET_NAME, pThis->name);
 	int rc = 0, i = 0;
 	void *events[BATH_PROCESS];
+	PfSpdkQueue *eq = (PfSpdkQueue *)pThis->event_queue;
 
 
-	while((rc = pThis->event_queue.get_events(BATH_PROCESS, events)) >= 0) {
+	while((rc = eq->get_events(BATH_PROCESS, events)) >= 0) {
 		for (i = 0; i < rc; i++) {
 			struct pf_spdk_msg *event = (struct pf_spdk_msg *)events[i];
 			switch (event->event.type)
@@ -128,7 +135,7 @@ void* thread_proc_spdkr(void* arg)
 					break;
 				}
 			}
-			pThis->event_queue.put_event(events[i]);
+			eq->put_event(events[i]);
 		}
 		if (pThis->func_priv) {
 			int com = 0;
@@ -144,7 +151,7 @@ int PfEventThread::sync_invoke(std::function<int(void)> _f)
 	SyncInvokeArg arg;
 	sem_init(&arg.sem, 0, 0);
 	arg.func = std::move(_f);
-	this->event_queue.post_event(EVT_SYNC_INVOKE, 0, &arg);
+	this->event_queue->post_event(EVT_SYNC_INVOKE, 0, &arg);
 	sem_wait(&arg.sem);
 	return arg.rc;
 }

@@ -27,12 +27,15 @@
 #include "pf_poller.h"
 #include "pf_buffer.h"
 #include "pf_client_api.h"
+#include "pf_app_ctx.h"
 
 using namespace std;
 using nlohmann::json;
 size_t iov_from_buf(const struct iovec *iov, unsigned int iov_cnt, const void *buf, size_t bytes);
 
 static const char* pf_lib_ver = "S5 client version:0x00010000";
+
+PfAppCtx client_app_context;
 
 #define CLIENT_TIMEOUT_CHECK_INTERVAL 1 //seconds
 const char* default_cfg_file = "/etc/pureflash/pf.conf";
@@ -381,7 +384,7 @@ int PfClientVolume::do_open(bool reopen, bool is_aof)
 	vol_proc = new PfVolumeEventProc(this);
 	vol_proc->init("vol_proc", io_depth);
 	vol_proc->start();
-	event_queue = &vol_proc->event_queue; //keep for quick reference
+	event_queue = vol_proc->event_queue; //keep for quick reference
 	state = VOLUME_OPENED;
 	clean.cancel_all();
 	open_time = now_time_usec();
@@ -782,7 +785,7 @@ int PfClientVolume::process_event(int event_type, int arg_i, void* arg_p)
 			{
 				S5LOG_WARN("send volume reopen request for:%s", volume_name.c_str());
 				conn_pool->close_all();
-				vol_proc->event_queue.post_event(EVT_REOPEN_VOLUME, 0, (void*)(now_time_usec()));
+				vol_proc->event_queue->post_event(EVT_REOPEN_VOLUME, 0, (void*)(now_time_usec()));
 			}
 		break;
 	}
@@ -872,7 +875,7 @@ void PfClientVolume::timeout_check_proc()
 			{
 				S5LOG_DEBUG("IO timeout detected, cid:%d, volume:%s, timeout:%luus",
                             ((PfMessageHead*)ios[i].cmd_bd->buf)->command_id, volume_name.c_str(), io_timeout_us);
-				vol_proc->event_queue.post_event(EVT_IO_TIMEOUT, 0, &ios[i]);
+				vol_proc->event_queue->post_event(EVT_IO_TIMEOUT, 0, &ios[i]);
 				ios[i].is_timeout = 1;
 			}
 		}

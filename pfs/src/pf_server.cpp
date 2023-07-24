@@ -255,14 +255,14 @@ static int server_on_tcp_network_done(BufferDescriptor* bd, WcStatus complete_st
 					return 1;
 				} else {
 					iocb->received_time = now_time_usec();
-					conn->dispatcher->event_queue.post_event(EVT_IO_REQ, 0, iocb); //for read
+					conn->dispatcher->event_queue->post_event(EVT_IO_REQ, 0, iocb); //for read
 				}
 			}
 			else {
 				//data received
 				PfServerIocb *iocb = bd->server_iocb;
 				iocb->received_time = now_time_usec();
-				conn->dispatcher->event_queue.post_event(EVT_IO_REQ, 0, iocb); //for write
+				conn->dispatcher->event_queue->post_event(EVT_IO_REQ, 0, iocb); //for write
 			}
 		}
 		else if(bd->wr_op == WrOpcode::TCP_WR_SEND){

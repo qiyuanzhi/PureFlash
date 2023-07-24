@@ -7,11 +7,7 @@
 class PfEventThread
 {
 public:
-	#if 0
-	PfEventQueue event_queue;
-	#else
-	PfSpdkQueue event_queue;
-	#endif
+	pfqueue *event_queue;
 	pthread_t tid;
 	char name[32];
 	int (*func_priv)(int *, void *);

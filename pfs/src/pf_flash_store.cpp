@@ -874,14 +874,14 @@ void PfFlashStore::do_cow_entry(lmt_key* key, lmt_entry *srcEntry, lmt_entry *ds
 	sem_init(&r.sem, 0, 0);
 
 	r.buf = app_context.cow_buf_pool.alloc(COW_OBJ_SIZE);
-	event_queue.post_event(EVT_COW_READ, 0, &r);
+	event_queue->post_event(EVT_COW_READ, 0, &r);
 	sem_wait(&r.sem);
 	if(unlikely(r.complete_status != PfMessageStatus::MSG_STATUS_SUCCESS))	{
 		S5LOG_ERROR("COW read failed, status:%d", r.complete_status);
 		goto cowfail;
 	}
 
-	event_queue.post_event(EVT_COW_WRITE, 0, &r);
+	event_queue->post_event(EVT_COW_WRITE, 0, &r);
 	sem_wait(&r.sem);
 	if(unlikely(r.complete_status != PfMessageStatus::MSG_STATUS_SUCCESS))	{
 		S5LOG_ERROR("COW write failed, status:%d", r.complete_status);
@@ -1607,7 +1607,7 @@ int PfFlashStore::recovery_replica(replica_id_t  rep_id, const std::string &from
 				t->meta_ver = meta_ver;
 				t->opcode = PfOpCode::S5_OP_RECOVERY_READ;
 				t->owner_queue = &task_queue;
-				app_context.replicators[0]->event_queue.post_event(EVT_RECOVERY_READ_IO, 0, t);
+				app_context.replicators[0]->event_queue->post_event(EVT_RECOVERY_READ_IO, 0, t);
 			}
 			for(int i=0;i<iodepth; i++) {
 				sem_wait(&recov_sem);
@@ -1704,7 +1704,7 @@ void PfFlashStore::trimming_proc()
 
 		//TODO: implement trim logic
 		for(total_cnt = 0; total_cnt < MAX_CNT; total_cnt ++) {
-			int rc = event_queue.sync_invoke([this]() -> int {
+			int rc = event_queue->sync_invoke([this]() -> int {
 				if (trim_obj_queue.is_empty())
 					return -ENOENT;
 				int id = trim_obj_queue.dequeue();

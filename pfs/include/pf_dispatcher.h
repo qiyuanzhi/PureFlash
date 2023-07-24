@@ -167,7 +167,7 @@ inline void PfServerIocb::dec_ref() {
 
 inline void SubTask::complete(PfMessageStatus comp_status){
     complete_status = comp_status;
-    parent_iocb->conn->dispatcher->event_queue.post_event(EVT_IO_COMPLETE, 0, this);
+    parent_iocb->conn->dispatcher->event_queue->post_event(EVT_IO_COMPLETE, 0, this);
 }
 inline void SubTask::complete(PfMessageStatus comp_status, uint16_t meta_ver){
 	if(meta_ver > parent_iocb->complete_meta_ver)
