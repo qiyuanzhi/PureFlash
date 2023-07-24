@@ -26,7 +26,7 @@ public:
 	virtual int process_event(int event_type, int arg_i, void* arg_p) = 0;
 	int start();
 	void stop();
-	static void *thread_proc(void* arg);
+	void * (*thread_proc)(void* arg);
 
 	int sync_invoke(std::function<int(void)> _f);
 

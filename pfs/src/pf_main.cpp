@@ -232,7 +232,7 @@ int main(int argc, char *argv[])
 		if (rc)
 			S5LOG_FATAL("Failed to setup spdk");
 	}
-	//spdk_unaffinitize_thread();
+	spdk_unaffinitize_thread();
 
 	int disp_count = conf_get_int(app_context.conf, "dispatch", "count", 4, FALSE);
 	app_context.disps.reserve(disp_count);

@@ -2,6 +2,11 @@
 #include <string.h>
 
 #include "pf_event_thread.h"
+#include "pf_app_ctx.h"
+
+void* thread_proc_spdkr(void* arg);
+void* thread_proc_eventq(void* arg);
+
 PfEventThread::PfEventThread() {
 	inited = false;
 }
@@ -11,6 +16,10 @@ int PfEventThread::init(const char* name, int qd)
 	if(rc)
 		return rc;
 	strncpy(this->name, name, sizeof(this->name));
+	if (g_app_ctx->engine == SPDK)
+		thread_proc = thread_proc_spdkr;
+	else
+		thread_proc = thread_proc_eventq;
 	inited = true;
 	return 0;
 }
@@ -48,9 +57,12 @@ void PfEventThread::stop()
 	tid=0;
 
 }
-
+void* thread_proc_eventq(void* arg)
+{
+	return NULL;
+}
 #if 0
-void *PfEventThread::thread_proc(void* arg)
+void * thread_proc_eventq(void* arg)
 {
 	PfEventThread* pThis = (PfEventThread*)arg;
 	prctl(PR_SET_NAME, pThis->name);
@@ -82,9 +94,10 @@ void *PfEventThread::thread_proc(void* arg)
 	}
 	return NULL;
 }
-#else
+#endif
+
 #define BATH_PROCESS 8
-void *PfEventThread::thread_proc(void* arg)
+void* thread_proc_spdkr(void* arg)
 {
 	PfEventThread* pThis = (PfEventThread*)arg;
 	prctl(PR_SET_NAME, pThis->name);
@@ -125,7 +138,6 @@ void *PfEventThread::thread_proc(void* arg)
 
 	return NULL;
 }
-#endif
 
 int PfEventThread::sync_invoke(std::function<int(void)> _f)
 {
