@@ -35,6 +35,7 @@ void stop_app();
 PfAfsAppContext app_context;
 extern BufferPool* recovery_bd_pool;
 enum connection_type rep_conn_type = TCP_TYPE; //TCP:0  RDMA:1
+struct spdk_mempool * g_msg_mempool;
 
 static struct spdk_pci_addr g_allowed_pci_addr[MAX_ALLOWED_PCI_DEVICE_NUM];
 
@@ -233,7 +234,8 @@ int main(int argc, char *argv[])
 			S5LOG_FATAL("Failed to setup spdk");
 	}
 	spdk_unaffinitize_thread();
-
+	//spdk_call_unaffinitized(dispather_context_init, &rc);
+	
 	int disp_count = conf_get_int(app_context.conf, "dispatch", "count", 4, FALSE);
 	app_context.disps.reserve(disp_count);
 	for (int i = 0; i < disp_count; i++)
@@ -323,6 +325,7 @@ int main(int argc, char *argv[])
 	}
 
 	//spdk_call_unaffinitized(tcpserver_context_init, NULL);
+
 	app_context.tcp_server=new PfTcpServer();
 	rc = app_context.tcp_server->init();
 	if(rc)

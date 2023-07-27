@@ -1207,3 +1207,8 @@ int pf_delete_volume(const char* vol_name,  const char* cfg_filename)
 	}
 	return -1;
 }
+
+static void __attribute__((constructor)) app_context_init(void)
+{ 
+	g_app_ctx = &client_app_context;
+}

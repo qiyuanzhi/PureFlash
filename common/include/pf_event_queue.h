@@ -87,6 +87,7 @@ struct SyncInvokeArg
 
 struct pf_spdk_msg {
     struct S5Event event;
+	bool lock_cache_msg;
 	SLIST_ENTRY(pf_spdk_msg)	link;
 };
 
@@ -95,9 +96,11 @@ class PfSpdkQueue : public pfqueue
 public:
     struct spdk_ring *messages;
     SLIST_HEAD(, pf_spdk_msg)  msg_cache;
+	SLIST_HEAD(, pf_spdk_msg)  msg_cache_locked;
 	struct spdk_mempool * msg_mempool;
     int cahce_cnt;
 	int event_fd;
+	pthread_spinlock_t lock;
 
 	PfSpdkQueue();
 	~PfSpdkQueue();
@@ -107,6 +110,7 @@ public:
     int post_event(int type, int arg_i, void* arg_p);
 	int get_events(int max_events, void **msgs);
 	int put_event(void *msg);
+	int post_event_locked(int type, int arg_i, void* arg_p);
 	int sync_invoke(std::function<int()> f);
 };
 

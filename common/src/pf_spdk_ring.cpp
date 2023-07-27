@@ -32,8 +32,10 @@ static int64_t event_delta = 1;
 int PfSpdkQueue::init(const char* name, int size, enum spdk_ring_type mode)
 {
     char mempool_name[32];
-    struct pf_spdk_msg *msgs[MEMPOOL_CACHE_SIZE];
+    struct pf_spdk_msg *msgs[MEMPOOL_CACHE_SIZE*2];
+    int i;
 
+    pthread_spin_init(&lock, 0);
     safe_strcpy(this->name, name, sizeof(this->name));
 
     messages = spdk_ring_create(mode, size, SPDK_ENV_SOCKET_ID_ANY);
@@ -41,18 +43,22 @@ int PfSpdkQueue::init(const char* name, int size, enum spdk_ring_type mode)
         S5LOG_ERROR("Failed create spdk ring for:%s", name);
         return -1;
     }
+    S5LOG_INFO("%p\n", messages);
     snprintf(mempool_name, sizeof(mempool_name), "msgpool_%s", name);
-    msg_mempool = spdk_mempool_create(mempool_name, 1024, sizeof(pf_spdk_msg), SPDK_MEMPOOL_DEFAULT_CACHE_SIZE, SPDK_ENV_SOCKET_ID_ANY);
+    msg_mempool = spdk_mempool_create(mempool_name, MEMPOOL_CACHE_SIZE * 2, sizeof(pf_spdk_msg), SPDK_MEMPOOL_DEFAULT_CACHE_SIZE, SPDK_ENV_SOCKET_ID_ANY);
     if (!msg_mempool) {
         S5LOG_ERROR("Failed create spdk mempool for:%s", mempool_name);
         return -1;
     }
 
-    int rc = spdk_mempool_get_bulk(msg_mempool, (void **)msgs, MEMPOOL_CACHE_SIZE);
+    int rc = spdk_mempool_get_bulk(msg_mempool, (void **)msgs, MEMPOOL_CACHE_SIZE * 2);
     if (rc == 0) {
-        for(int i = 0; i < MEMPOOL_CACHE_SIZE; i++) {
+        for(i = 0; i < MEMPOOL_CACHE_SIZE; i++) {
             SLIST_INSERT_HEAD(&this->msg_cache, msgs[i], link);
             cahce_cnt++;
+        }
+        for (i = MEMPOOL_CACHE_SIZE; i < MEMPOOL_CACHE_SIZE * 2; i++) {
+             SLIST_INSERT_HEAD(&this->msg_cache_locked, msgs[i], link);
         }
     }
 
@@ -74,6 +80,31 @@ int PfSpdkQueue::post_event(int type, int arg_i, void* arg_p)
     msg->event.arg_i = arg_i;
     msg->event.arg_p = arg_p;
 
+
+    //S5LOG_ERROR("enqueu messages=====");
+    rc = spdk_ring_enqueue(messages, (void **)&msg, 1, NULL);
+    if (rc != 1){
+        S5LOG_ERROR("failed to enqueue event");
+        return -1;
+    }
+
+    return 0;
+}
+
+int PfSpdkQueue::post_event_locked(int type, int arg_i, void* arg_p)
+{
+    struct pf_spdk_msg *msg;
+    int rc;
+
+    pthread_spin_lock(&lock);
+    msg = SLIST_FIRST(&msg_cache_locked);
+    SLIST_REMOVE_HEAD(&msg_cache_locked, link);
+    pthread_spin_unlock(&lock);
+
+    msg->event.type = type;
+    msg->event.arg_i = arg_i;
+    msg->event.arg_p = arg_p;
+    msg->lock_cache_msg = true;
 
     //S5LOG_ERROR("enqueu messages=====");
     rc = spdk_ring_enqueue(messages, (void **)&msg, 1, NULL);
@@ -129,7 +160,13 @@ int PfSpdkQueue::put_event(void *msg)
     _msg->event.type = 0;
     _msg->event.arg_i = 0;
     _msg->event.arg_p = NULL;
-    SLIST_INSERT_HEAD(&msg_cache, (struct pf_spdk_msg *)msg, link);
+    if (_msg->lock_cache_msg) {
+        pthread_spin_lock(&lock);
+        SLIST_INSERT_HEAD(&msg_cache_locked, (struct pf_spdk_msg *)msg, link);
+        pthread_spin_unlock(&lock);
+    }else {
+        SLIST_INSERT_HEAD(&msg_cache, (struct pf_spdk_msg *)msg, link);
+    }
 }
 
 PfSpdkQueue::PfSpdkQueue()

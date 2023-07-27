@@ -47,14 +47,47 @@ PfEventThread::~PfEventThread()
 	destroy();
 }
 
+struct pt_thread_context {
+    bool spdk_engine;
+    void *(*f)(void *);
+    void *arg;
+    pthread_attr_t *a;
+    pthread_t *t;
+    bool affinitize;
+    uint32_t core;
+    int ret;
+	pthread_t *tid;
+};
+
+void* pt_thread_run(void *_arg)
+{
+    struct pt_thread_context *arg = (struct pt_thread_context *)_arg;
+    int rc;
+
+    rc = pthread_create(arg->tid, NULL, arg->f, arg->arg);	if(rc)
+	{
+		S5LOG_FATAL("Failed create pthread, rc:%d", rc);
+	}
+	
+	return NULL;
+}
+
 int PfEventThread::start()
 {
+	/*
+	struct pt_thread_context pt;
+	pt.f = thread_proc;
+	pt.arg = this;
+	pt.tid = &tid;
+	spdk_call_unaffinitized(pt_thread_run, &pt);
+	*/
 	int rc = pthread_create(&tid, NULL, thread_proc, this);
 	if(rc)
 	{
 		S5LOG_ERROR("Failed create thread:%s, rc:%d", name, rc);
 		return rc;
 	}
+
 	return 0;
 }
 void PfEventThread::stop()

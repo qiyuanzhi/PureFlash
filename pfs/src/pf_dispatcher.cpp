@@ -60,7 +60,7 @@ int PfDispatcher::process_event(int event_type, int arg_i, void* arg_p)
 		rc = dispatch_complete((SubTask*)arg_p);
 		break;
 	default:
-		S5LOG_FATAL("Unknown event:%d", event_type);
+		S5LOG_ERROR("Unknown event:%d", event_type);
 	}
 	return rc;
 }
