@@ -25,6 +25,9 @@
 
 static int64_t event_delta = 1;
 
+static __thread PfSpdkQueue *tls_queue = NULL;
+
+
 #define MEMPOOL_CACHE_SIZE 1024
 
 
@@ -72,9 +75,17 @@ void PfSpdkQueue::destroy()
 
 int PfSpdkQueue::post_event(int type, int arg_i, void* arg_p)
 {
-    struct pf_spdk_msg *msg = SLIST_FIRST(&msg_cache);
-    SLIST_REMOVE_HEAD(&msg_cache, link);
+    struct pf_spdk_msg *msg;
     int rc;
+    if (tls_queue) {
+        msg = SLIST_FIRST(&tls_queue->msg_cache);
+        SLIST_REMOVE_HEAD(&tls_queue->msg_cache, link);
+    }else{
+        pthread_spin_lock(&lock);
+        msg = SLIST_FIRST(&msg_cache_locked);
+        SLIST_REMOVE_HEAD(&msg_cache_locked, link);
+        pthread_spin_unlock(&lock);
+    }
 
     msg->event.type = type;
     msg->event.arg_i = arg_i;
@@ -167,6 +178,11 @@ int PfSpdkQueue::put_event(void *msg)
     }else {
         SLIST_INSERT_HEAD(&msg_cache, (struct pf_spdk_msg *)msg, link);
     }
+}
+
+void PfSpdkQueue::set_thread_queue()
+{
+    tls_queue = this;
 }
 
 PfSpdkQueue::PfSpdkQueue()

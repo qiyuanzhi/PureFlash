@@ -143,7 +143,7 @@ void* thread_proc_spdkr(void* arg)
 	int rc = 0, i = 0;
 	void *events[BATH_PROCESS];
 	PfSpdkQueue *eq = (PfSpdkQueue *)pThis->event_queue;
-
+	eq->set_thread_queue();
 
 	while((rc = eq->get_events(BATH_PROCESS, events)) >= 0) {
 		for (i = 0; i < rc; i++) {

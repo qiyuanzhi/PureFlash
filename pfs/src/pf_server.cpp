@@ -44,7 +44,7 @@ int PfTcpServer::init()
 {
 	int rc = 0;
 	conf_file_t conf=app_context.conf;
-	poller_cnt = conf_get_int(conf, "tcp_server", "poller_count", 4, FALSE);
+	poller_cnt = conf_get_int(conf, "tcp_server", "poller_count", 8, FALSE);
 	pollers = new PfPoller[poller_cnt];
 	for(int i=0;i<poller_cnt;i++)
 	{

@@ -1701,7 +1701,7 @@ void PfFlashStore::trimming_proc()
 	while(1) {
 		int total_cnt = 0;
 		int MAX_CNT = 10;
-
+		#if 0
 		//TODO: implement trim logic
 		for(total_cnt = 0; total_cnt < MAX_CNT; total_cnt ++) {
 			int rc = event_queue->sync_invoke([this]() -> int {
@@ -1717,6 +1717,7 @@ void PfFlashStore::trimming_proc()
 		if(total_cnt > 0){
 			S5LOG_WARN("%d objects should be trimmed, but feature not implemented", total_cnt);
 		}
+		#endif
 		sleep(1);
 	}
 }

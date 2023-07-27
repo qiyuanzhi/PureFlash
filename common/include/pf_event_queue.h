@@ -112,6 +112,7 @@ public:
 	int put_event(void *msg);
 	int post_event_locked(int type, int arg_i, void* arg_p);
 	int sync_invoke(std::function<int()> f);
+	void set_thread_queue();
 };
 
 
