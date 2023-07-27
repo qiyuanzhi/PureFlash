@@ -1884,11 +1884,14 @@ int PfFlashStore::register_controller(const char *trid_str)
 	}
 }
 
-
+int disk_cnt = 0;
 int PfFlashStore::spdk_nvme_init(const char *trid_str)
 {
 	int rc;
 	int ret;
+	char name_pool[8];
+
+	sprintf(name_pool, "disk_%d", disk_cnt++);
 
 	rc = register_controller(trid_str);
 	if (rc) {
@@ -1906,7 +1909,7 @@ int PfFlashStore::spdk_nvme_init(const char *trid_str)
 
 	safe_strcpy(this->tray_name, trid_str, sizeof(this->tray_name));
 
-	PfEventThread::init("disk", MAX_AIO_DEPTH*2);
+	PfEventThread::init(name_pool, MAX_AIO_DEPTH*2);
 
 	S5LOG_INFO("Spdk Loading tray %s ...", trid_str);
 

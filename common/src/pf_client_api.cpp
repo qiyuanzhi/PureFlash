@@ -234,14 +234,17 @@ int pf_query_volume_info(const char* volume_name, const char* cfg_filename, cons
 static int client_on_tcp_network_done(BufferDescriptor* bd, WcStatus complete_status, PfConnection* _conn, void* cbk_data)
 {
 	PfTcpConnection* conn = (PfTcpConnection*)_conn;
+
 	if(complete_status == WcStatus::TCP_WC_SUCCESS) {
 
-		if(bd->data_len == sizeof(PfMessageHead) && bd->cmd_bd->opcode == PfOpCode::S5_OP_WRITE) {
-			//message head sent complete
-			PfClientIocb* iocb = bd->client_iocb;
-			conn->add_ref(); //for start send data
-			iocb->data_bd->conn = conn;
-			conn->start_send(iocb->data_bd); //on client side, use use's buffer
+		if(bd->data_len == sizeof(PfMessageHead)) {
+			if(bd->cmd_bd->opcode == PfOpCode::S5_OP_WRITE) {
+				//message head sent complete, continue to send data for write OP
+				PfClientIocb* iocb = bd->client_iocb;
+				conn->add_ref(); //for start send data
+				iocb->data_bd->conn = conn;
+				conn->start_send(iocb->data_bd); //on client side, use user's buffer
+			}
 			return 1;
 		} else if(bd->data_len == sizeof(PfMessageReply) ) {
 			//assert(bd->reply_bd->command_id<32);
@@ -263,9 +266,21 @@ static int client_on_tcp_network_done(BufferDescriptor* bd, WcStatus complete_st
 				conn->start_recv(iocb->data_bd); //on client side, use use's buffer
 				return 1;
 			}
+			return conn->volume->event_queue->post_event(EVT_IO_COMPLETE, complete_status, bd);
+		}else{
+			PfClientIocb* iocb = bd->client_iocb;
+			if(iocb->cmd_bd->cmd_bd->opcode == PfOpCode::S5_OP_READ){ //case c
+				//for READ, need to complete IO
+				PfClientIocb* iocb = bd->client_iocb;
+				return conn->volume->event_queue->post_event(EVT_IO_COMPLETE, complete_status, bd);
+
+			}
+			return 0;
 		}
 	}
-	return conn->volume->event_queue->post_event(EVT_IO_COMPLETE, complete_status, bd);
+
+	S5LOG_ERROR("Unexpected status:%d, data_len=%d", complete_status, bd->data_len);
+	return -1;
 }
 
 static void client_on_tcp_close(PfConnection* c)
